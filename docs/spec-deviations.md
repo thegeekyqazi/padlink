@@ -17,6 +17,7 @@ early in Phase 1. Entries D1 to D8 are about Phase 0; D9 is an agreed change to 
 | D8 | Not in the spec | `testbench/od-sender.sh` wraps the official sender so it can only run against the nested instance | Makes D2 enforceable, and gives the session one narrow thing to be permitted to run | None on the product |
 | D9 | R1.16: "Stylus input that arrives as `touch` works the same way"; `pencil` handling is Phase 3 (R3.4) | **Agreed by the user on 16 Nov 2026:** in Phase 1, also map `pencil` down, move and up to pointer motion and left button, exactly like `touch` | Spike 5 showed this receiver sends `pencil`, never `touch`, for the stylus. Without this the pencil is dead until the uinput tablet exists | The pencil works as a plain pointer from Phase 1. R3.4 later replaces it with a real tablet device. Small change in `padlink-input` |
 | D10 | R1.20: "`padlink clean` removes any leftover `padlink-*` output from a crash" | `clean` refuses while a daemon holds the session lock | Removing an output that is being captured can crash Hyprland 0.56.2 (section 8). `disconnect` is the right command then, and the message says so | None for the crash case the requirement is about |
+| D11 | R2.5: "Give up with a clear message after three losses within a minute" | On giving up the daemon also pauses, as after `padlink disconnect`, and keeps the reason in `padlink status` until `padlink connect` | Otherwise it would redial three seconds later and repeat the cycle for ever against a rule that keeps winning | The user must run `padlink connect` after fixing the rule |
 | D7 | Section 4 lists reference code to read; no location given | Cloned into `reference/`, which is git-ignored, along with the `od-sender` download | Keeps third-party source and binaries out of this repo's history | `reference/` must be re-created on a fresh clone; `docs/spikes.md` names the pinned tag |
 
 ## Where the spec's facts were wrong
@@ -55,12 +56,12 @@ Last updated 16 Nov 2026, after the daemon and CLI were built.
 | Section 8: `ext-image-copy-capture` from Hyprland 0.57 | Not built. `wlr-screencopy` is used on every version; `capture = "ext"` warns |
 | R1.24 logs to the journal | The daemon logs to stderr, which the journal captures under systemd. `padlink logs` follows the unit. Timestamps are not yet dropped under the journal |
 | Section 4 hotplug through usbmuxd `Listen` | The daemon polls `ListDevices` ten times a second instead. `padlink_usbmux::Listener` exists and is tested but is not used |
-| `padlink doctor` | Not built (it is R2.10, Phase 2) |
 | Section 9: fake receiver that decodes the stream; CI | Not built |
 
 Built since this table was first written: config file (R1.23), lock file
 (R1.21), `padlink status` (R1.22), `connect`, `disconnect`, `clean` (R1.20),
-`logs`, continuous running with reconnect.
+`logs`, `doctor` (R2.10), continuous running with reconnect, config-reload
+recovery (R2.5).
 
 ## Requirements changed
 

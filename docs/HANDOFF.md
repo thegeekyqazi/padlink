@@ -4,8 +4,14 @@ For whoever continues this project, human or agent. It assumes you have not
 seen the earlier conversation. Keep it current: update the "State" and "What
 is left" sections whenever you finish something.
 
-Last updated: 16 Nov 2026, after the long-running daemon and the `padlink`
-CLI were built and checked against the real iPad in the nested bench.
+Last updated: 16 Nov 2026, after `padlink doctor` and config-reload
+recovery (R2.5). 154 tests pass, plus 8 in the nested bench.
+
+**Where things stand in one paragraph:** every Phase 1 command works in the
+nested bench against the real iPad. Nothing has run on the user's live
+session; `docs/acceptance.md` is the procedure for that and the user must
+do it. The main Phase 1 gap is zero-copy capture, which is waiting for the
+user to install `mesa-libgbm-devel`.
 
 ## 1. What this is
 
@@ -18,6 +24,7 @@ OpenDisplay wire protocol, version 3.
 - `docs/spec-deviations.md`: every place the work differs from the spec,
   targets that cannot be met, and a table of what Phase 1 still lacks.
 - `docs/spikes.md`: every measurement taken, with the commands.
+- `docs/acceptance.md`: the first live run and the manual acceptance list.
 - `AGENTS.md`: the rules. Read them first; rule 1 protects the user's
   desktop.
 
@@ -36,8 +43,9 @@ Already installed: `mesa-va-drivers-freeworld`, `libavcodec-freeworld`
 `libswscale` headers, `libva-devel`, `libdrm-devel`, `wayland-devel`,
 `libusbmuxd-utils`, `wf-recorder`, `foot`. Rust 1.95.
 
-Not installed and possibly needed for zero-copy capture: `mesa-libgbm-devel`
-(check with `rpm -q`; ask the user to install it, never use sudo yourself).
+Not installed and needed for zero-copy capture: `mesa-libgbm-devel`. The
+user was asked on 16 Nov 2026 to run `sudo dnf install mesa-libgbm-devel`;
+check with `rpm -q mesa-libgbm-devel` before starting that work.
 
 ## 3. Layout
 
@@ -186,13 +194,13 @@ In the order I would do it. Each item names the files and the approach.
 
 ### Phase 1
 
-1. Done: the long-running daemon, lock file, control socket and CLI.
-   Loose ends there: the daemon polls `list_devices` instead of using
-   `padlink_usbmux::Listener`; under systemd the log lines still carry their
-   own timestamps; `padlink doctor` (R2.10) does not exist.
-2. Done: `packaging/padlinkd.service` and `README.md`, if present in the
-   tree; otherwise write them (a user unit bound to
-   `graphical-session.target`, R2.1).
+1. Done: the long-running daemon, lock file, control socket, CLI including
+   `doctor`, README, systemd unit, and config-reload recovery (R2.5:
+   `Session::reapply` in `session.rs`). Loose ends there: the daemon polls
+   `list_devices` instead of using `padlink_usbmux::Listener`; under
+   systemd the log lines still carry their own timestamps.
+2. **The user's live run** (`docs/acceptance.md`). Expect findings; fix
+   those before anything else.
 3. **Zero-copy capture** (R1.12): the biggest remaining latency item for
    the GPU path. It removes the compositor's readback and the 3.6 to 5.8 ms
    upload.
@@ -244,9 +252,23 @@ runs there, and it is the user who runs it.
 
 ### Phase 2 and 3
 
-All of SPEC.md section 6 (autostart unit, auto-connect, reconnect,
-workspace memory, config reloads, suspend and resume, rotation debounce,
-compositor restart, notifications, `doctor`, RPM packaging) and section 7.
+Phase 2 (SPEC.md section 6) item by item:
+
+| Item | State |
+| --- | --- |
+| R2.1 autostart unit | `packaging/padlinkd.service` exists; `doctor` reports whether `graphical-session.target` is active |
+| R2.2 auto-connect | `autoconnect` config key works. Remembering known devices and asking about new ones is not built |
+| R2.3 reconnect | Built in `machine.rs`: redial after `sleeping`, `closing`, a dropped link. Unverified with a real lock or unplug |
+| R2.4 workspace memory | Not built |
+| R2.5 config reloads | Built and tested nested |
+| R2.6 suspend and resume | Not built (logind `PrepareForSleep`) |
+| R2.7 rotation debounce | Rotation rebuilds; no debounce |
+| R2.8 compositor restart | Not built: the daemon holds one `Hyprland` handle for its lifetime. Instance discovery without the env variable works |
+| R2.9 notifications | Not built |
+| R2.10 doctor | Built |
+| R2.11 RPM packaging | Not built |
+
+Then section 7.
 For Phase 3 the order is R3.4 (uinput tablet for the pencil) first, then
 the spec's order. Rotation already rebuilds the display on a second
 `hello`; only the debounce (R2.7) is missing.
