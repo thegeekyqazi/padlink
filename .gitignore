@@ -1,0 +1,4 @@
+target/
+/reference/
+*.h264
+*.log
