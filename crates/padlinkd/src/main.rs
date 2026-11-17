@@ -9,9 +9,11 @@
 mod control;
 mod debounce;
 mod machine;
+mod notify;
 mod session;
 mod slot;
 mod stats;
+mod suspend;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -204,6 +206,7 @@ fn run() -> Result<(), String> {
         )
         .map_err(|e| format!("cannot set up the connection: {e}"))?;
         let end = session.run(|| stop.load(Ordering::Relaxed) || !shared.wanted());
+        let was_streaming = shared.status().state == State::Streaming;
 
         let (ended, why) = match end {
             SessionEnd::Stopped => continue,
@@ -218,10 +221,12 @@ fn run() -> Result<(), String> {
             SessionEnd::Disconnected(why) => (Ended::WillReturn, why),
             SessionEnd::Failed(why) => {
                 error!("{why}");
+                notify::send(config.notifications, notify::Kind::Error, &why);
                 (Ended::Failed, why)
             }
             SessionEnd::GaveUp(why) => {
                 error!("{why}");
+                notify::send(config.notifications, notify::Kind::Error, &why);
                 // Stay disconnected; the top of the loop pauses the machine.
                 shared.set_wanted(false);
                 paused_because = Some(why);
@@ -229,6 +234,9 @@ fn run() -> Result<(), String> {
             }
         };
         info!("disconnected: {why}");
+        if was_streaming && ended != Ended::Failed {
+            notify::send(config.notifications, notify::Kind::Disconnected, &why);
+        }
         message = Some(why);
         schedule(machine.on(Event::SessionEnded(ended)), &mut dial_at);
     }
@@ -273,6 +281,7 @@ fn session_config(
         wayland_socket: wayland_socket.to_path_buf(),
         hypr_events: hypr_events.to_path_buf(),
         workspaces: workspaces.clone(),
+        notifications: config.notifications,
     }
 }
 

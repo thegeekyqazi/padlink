@@ -33,8 +33,10 @@ use padlink_config::runtime::{Latency, State};
 
 use crate::control::Shared;
 use crate::debounce::Debounce;
+use crate::notify;
 use crate::slot::{Slot, Work};
 use crate::stats::{Samples, describe};
+use crate::suspend::SuspendWatch;
 
 /// The settings one session needs. Filled from the config file.
 #[derive(Debug, Clone)]
@@ -56,6 +58,8 @@ pub struct SessionConfig {
     /// The workspaces that were on the display when it last went away, to
     /// be moved back when it returns (R2.4). Outlives the session.
     pub workspaces: Arc<Mutex<Vec<String>>>,
+    /// Show desktop notifications (R2.9).
+    pub notifications: bool,
 }
 
 /// Why a session ended.
@@ -192,6 +196,9 @@ pub struct Session<'a, R: Receiver> {
     alive: Arc<AtomicBool>,
     /// A changed display request waiting out its debounce.
     rotation: Debounce<DisplayRequest>,
+    suspend: SuspendWatch,
+    /// Whether "connected" was already announced for this session.
+    announced: bool,
 }
 
 impl<'a, R: Receiver> Session<'a, R> {
@@ -234,6 +241,8 @@ impl<'a, R: Receiver> Session<'a, R> {
             losses: Vec::new(),
             alive,
             rotation: Debounce::default(),
+            suspend: SuspendWatch::new(),
+            announced: false,
         })
     }
 
@@ -277,6 +286,14 @@ impl<'a, R: Receiver> Session<'a, R> {
             };
             if let Some(end) = outcome {
                 break end;
+            }
+            // R2.6: a display that lived through a suspend shows a frozen
+            // picture. End the session; the daemon builds a fresh one.
+            if let Some(slept) = self.suspend.slept() {
+                break SessionEnd::Disconnected(format!(
+                    "the laptop was suspended for {} s; starting again",
+                    slept.as_secs()
+                ));
             }
             if let Some(display) = self.rotation.take_due(Instant::now()) {
                 if let Some(end) = self.rebuild(&display) {
@@ -532,6 +549,18 @@ impl<'a, R: Receiver> Session<'a, R> {
         match self.build(request) {
             Ok(pipeline) => {
                 info!("{}", pipeline.description);
+                if !std::mem::replace(&mut self.announced, true) {
+                    notify::send(
+                        self.config.notifications,
+                        notify::Kind::Connected,
+                        &format!(
+                            "{}, {}x{}",
+                            request.device_name.as_deref().unwrap_or("iPad"),
+                            pipeline.spec.width,
+                            pipeline.spec.height
+                        ),
+                    );
+                }
                 self.pipeline = Some(pipeline);
                 None
             }
