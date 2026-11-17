@@ -116,6 +116,8 @@ pub struct Config {
     /// Connect as soon as an iPad is plugged in, without `padlink connect`
     /// (R2.2).
     pub autoconnect: bool,
+    /// Desktop notifications for connected, disconnected and errors (R2.9).
+    pub notifications: bool,
 }
 
 impl Default for Config {
@@ -129,6 +131,7 @@ impl Default for Config {
             render_node: None,
             capture: Capture::Auto,
             autoconnect: true,
+            notifications: true,
         }
     }
 }
@@ -245,6 +248,7 @@ mod tests {
             render-node = "/dev/dri/renderD129"
             capture = "wlr"
             autoconnect = false
+            notifications = false
             "#,
         )
         .unwrap();
@@ -259,6 +263,7 @@ mod tests {
                 render_node: Some("/dev/dri/renderD129".into()),
                 capture: Capture::Wlr,
                 autoconnect: false,
+                notifications: false,
             }
         );
     }

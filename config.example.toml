@@ -33,5 +33,8 @@ capture = "auto"
 # until you run `padlink connect`.
 autoconnect = true
 
+# Desktop notifications when the iPad connects, disconnects or fails.
+notifications = true
+
 # The GPU to encode on. Leave unset to use the first one found.
 # render-node = "/dev/dri/renderD128"

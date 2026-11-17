@@ -31,7 +31,7 @@ signal-hook = "0.4"
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 memmap2 = "0.9"
-rustix = { version = "1", features = ["event", "fs"] }
+rustix = { version = "1", features = ["event", "fs", "time"] }
 plist = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
