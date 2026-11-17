@@ -1,15 +1,17 @@
 # First run on the live session, and the Phase 1 acceptance list
 
-Everything so far ran in a nested test compositor. This is the procedure
-for the first run on the real desktop, which only the user does (SPEC.md
-rule 2 and section 9).
+The user has run padlink on the real desktop and reports that minimal
+testing looks good. The checklist below has not been completed step by step.
+Live-session acceptance is performed only by the user (SPEC.md rule 2 and
+section 9). Automated nested checks and performance reports are available
+through `testbench/stress.sh`; see `testbench/STRESS.md`.
 
 ## Before you start
 
 - **Save your work.** The live session runs Hyprland 0.56.2, which can
   abort if a captured output is removed in the wrong order. padlink always
   stops capture first, and that order survived every nested test, including
-  `kill -9`, but it has never run on the live session.
+  `kill -9`, but full live-session acceptance is still outstanding.
 - Plug the iPad in, unlock it, open the OpenDisplay app.
 - Run the checks. In the project folder:
 

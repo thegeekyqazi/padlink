@@ -298,3 +298,64 @@ Consequences:
 ## Pinned upstream
 
 OpenDisplay `v1.30.3` (commit `90f7446`), the latest release on 16 Nov 2026.
+
+## Automated stress comparison, 16 Nov 2026 (Codex)
+
+The user reports minimal live testing looks good; that does not certify the
+manual acceptance checklist. This comparison ran entirely in nested Hyprland
+with the real USB iPad, GPU H.264 at 2360x1640, scale 2, 60 Hz cap:
+
+```sh
+testbench/nested.sh
+testbench/stress.sh --duration 15 --cycles 3 --output test-results/first-stress
+```
+
+Each load used a new session and 10 seconds of warmup, followed by 15 seconds
+of measurement. Light load moves the pointer through IPC (about 39 updates/s
+on this machine). Heavy load uses `foot --fullscreen` with deterministic
+60 Hz animated text/colour output from `testbench/stress-load.py`. This is
+repeatable between capture profiles, but differs from the earlier unbounded
+scrolling-text workload. CPU is daemon-only percentage of one logical core.
+
+**These are medians of rolling-window reports**, not percentiles computed
+from all raw frames in the run. Receiver reports are deduplicated by sequence
+and age-checked; 3–4 receiver reports contributed per active load.
+
+| Load / capture | FPS | Capture-to-encode p50 / p95 ms | Receiver p50 / p95 ms | CPU % | Replaced frames during sampling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| zero-copy-idle | 0.0 | 9.2 / 18.3 | - / - | 0.0 | 0 |
+| zero-copy-light | 39.0 | 9.1 / 16.1 | 13.0 / 16.5 | 4.9 | 0 |
+| zero-copy-heavy | 59.5 | 14.4 / 16.8 | 16.0 / 20.0 | 8.0 | 0 |
+| shared-memory-idle | 0.0 | 15.5 / 18.1 | - / - | 0.0 | 0 |
+| shared-memory-light | 38.5 | 15.5 / 22.6 | 21.0 / 23.5 | 21.8 | 0 |
+| shared-memory-heavy | 37.2 | 36.4 / 43.8 | 41.0 / 47.0 | 29.8 | 287 |
+
+Findings: zero-copy stayed active and substantially improved both latency
+and CPU cost, particularly under heavy animation. It met the receiver
+20/35 ms targets in this run, but still missed the 8 ms capture-to-encode
+target. Shared memory missed receiver latency and CPU targets under heavy
+load. Idle CPU was near zero for both paths.
+
+Functional checks passed for both profiles: second-daemon refusal, nested
+config reload with continued video, three disconnect/reconnect cycles,
+SIGKILL followed by startup cleanup and reconnection, and final output
+removal. Connect-to-video-status was about 1.21 s; disconnect was 0.11–0.21 s.
+These are not true first-displayed-frame or subsecond reload measurements.
+The workspace checks (168 tests), nested tests (10) and initial runner tests
+passed. No live display operations were performed.
+
+The first report also flags light FPS below 55, which was a **test-design
+error**: pointer damage is IPC-limited. The final runner grades that load
+for nonzero video and applies the >=55 FPS heuristic only to heavy animation.
+The original report is preserved without changing its figures. Raw JSONL,
+logs and report are local under `test-results/first-stress/` (git-ignored).
+
+A short final zero-copy validation used
+`testbench/stress.sh --duration 10 --cycles 1 --profiles zero-copy --output test-results/verified-zero-copy`.
+Light receiver p50/p95 was 13/13 ms, heavy 15/20 ms at 59.4 FPS and about
+9% daemon CPU. Capture-to-encode p50 was 9.1 ms light and 16.1 ms heavy,
+so both checks correctly failed the 8 ms target. Every functional check,
+receiver latency check, CPU check and corrected FPS check passed. Final
+Python regression coverage is 10 tests; formatting, Clippy, 168 workspace
+tests and 10 nested tests passed. The agent stopped its own nested compositor
+after daemon exit and successful output cleanup; no live outputs were changed.

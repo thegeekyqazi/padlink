@@ -17,14 +17,14 @@ Work in progress. Read this before relying on it.
 - Streaming, hardware encoding, touch input, `connect`, `disconnect`,
   `status` and crash cleanup work **in a nested test compositor** against a
   real iPad 10th generation.
-- **It has not been run on a live desktop session yet.**
+- The user has tried it on the live desktop and reports that minimal testing
+  looks good. Full manual acceptance is still outstanding.
 - Measured on the development laptop (Ryzen 5 PRO 5650U, integrated Radeon,
   2360x1640 at 60 Hz): 14 to 17 ms end to end in ordinary use, 30 to 39 ms
   when the whole screen changes every frame. Details in `docs/spikes.md`.
-- Not built yet: zero-copy capture, the newer capture protocol for Hyprland
-  0.57 and later, `padlink doctor`, auto-start polish, rotation debounce,
-  workspace memory, suspend handling, Wi-Fi, a real pen tablet device. The
-  full list is in `docs/spec-deviations.md`.
+- Zero-copy capture, `doctor`, rotation debounce, workspace memory and suspend
+  detection are implemented. The newer capture protocol for Hyprland 0.57+,
+  Wi-Fi and a real pen tablet device remain open. See `docs/HANDOFF.md`.
 
 ## Limits that will not go away
 
@@ -113,6 +113,11 @@ testbench/run-nested-tests.sh     # tests that create outputs, against it
 testbench/padlinkd.sh             # the daemon, against it
 testbench/padlink.sh status       # the CLI, against it
 ```
+
+Run `testbench/stress.sh` while the nested compositor is open for automated
+checks, GPU capture comparisons, stress loads, latency reports and recovery
+tests. See [the stress-test guide](testbench/STRESS.md) for prerequisites,
+longer soak runs, report interpretation and manual coverage limits.
 
 ## Credits and licence
 

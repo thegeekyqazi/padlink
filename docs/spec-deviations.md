@@ -54,7 +54,7 @@ Last updated 16 Nov 2026, after the daemon and CLI were built.
 | Requirement | State |
 | --- | --- |
 | R1.2 telling locked from untrusted | One combined message for unplugged, locked or untrusted |
-| R1.12 zero-copy (dmabuf) capture | Built, with automatic fallback to shared memory and a `zero-copy` config key. Tested in parts (encoder with GBM buffers; capture in the nested bench). **Not yet streamed to the iPad end to end, so its latency is unmeasured** |
+| R1.12 zero-copy (dmabuf) capture | Built, with automatic fallback to shared memory and a `zero-copy` config key. Tested in parts (encoder with GBM buffers; capture in the nested bench). Now streamed end to end in the nested bench by `testbench/stress.sh`; see the latest comparison in `docs/spikes.md` |
 | Section 8: `ext-image-copy-capture` from Hyprland 0.57 | Not built. `wlr-screencopy` is used on every version; `capture = "ext"` warns |
 | R1.24 logs to the journal | The daemon logs to stderr, which the journal captures under systemd. `padlink logs` follows the unit. Timestamps are not yet dropped under the journal |
 | Section 4 hotplug through usbmuxd `Listen` | The daemon polls `ListDevices` ten times a second instead. `padlink_usbmux::Listener` exists and is tested but is not used |

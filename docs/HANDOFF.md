@@ -4,17 +4,17 @@ For whoever continues this project, human or agent. It assumes you have not
 seen the earlier conversation. Keep it current: update the "State" and "What
 is left" sections whenever you finish something.
 
-Last updated: 16 Nov 2026, after zero-copy capture (R1.12) was built.
+Last updated: 16 Nov 2026, during automated stress-runner implementation.
 168 tests pass, plus 10 in the nested bench.
 
 **Where things stand in one paragraph:** every Phase 1 command works in the
 nested bench against the real iPad. The user started `padlinkd` on the
 **live session** on 16 Nov 2026 (an older build, shared-memory capture): the
-display appeared at 2877x0, scale 2, and streamed. Nobody has gone through
-`docs/acceptance.md` step by step yet. Zero-copy capture is built and passes
-its tests (encoder with GBM buffers; capture in the nested bench), but **has
-not streamed to the iPad end to end**, because the user's live daemon held
-the iPad at the time. Measuring it is the next job.
+display appeared at 2877x0, scale 2, and streamed. The user reports minimal live testing looks good; full manual acceptance
+is still outstanding. Zero-copy capture now streams to the iPad end to end
+in the nested bench. The automated stress runner compares it with shared
+memory and records latency and recovery checks; see `testbench/STRESS.md`
+and the latest measurement section in `docs/spikes.md`.
 
 **Never run `testbench/padlinkd.sh` while the user's own `padlinkd` is
 running.** They share the session lock, so the bench daemon refuses to
@@ -209,13 +209,14 @@ In the order I would do it. Each item names the files and the approach.
    systemd the log lines still carry their own timestamps.
 2. **The user's live run** (`docs/acceptance.md`). Expect findings; fix
    those before anything else.
-3. **Measure zero-copy capture** (R1.12). It is built: capture allocates
+3. **Extend zero-copy measurements** (R1.12). The first automated nested
+   end-to-end comparison is now recorded in `docs/spikes.md`. It is built: capture allocates
    GBM buffers and registers them through linux-dmabuf
    (`padlink-capture/src/wlr.rs`, `GpuAllocator`), the encoder imports them
    with `hwmap` (`padlink-encode/src/dmabuf.rs`), and the daemon uses it
    whenever the GPU encoder is active and `zero-copy = true` (the default).
-   It falls back to shared memory by itself. What is missing is the
-   end-to-end run: `testbench/padlinkd.sh`, check `padlink status` says
+   It falls back to shared memory by itself. For more measurements use
+   `testbench/stress.sh`, or manually: `testbench/padlinkd.sh`, check `padlink status` says
    "zero-copy GPU buffers", then light load (`testbench/wiggle.sh 12`) and
    heavy load, and add the numbers to `docs/spikes.md` beside the
    shared-memory ones (16 to 17 ms and 39 ms end to end). In the encoder
@@ -303,3 +304,25 @@ Before publication, formatting and workspace Clippy passed. The sandboxed
 test run failed because the GPU render device was unavailable; the host run
 passed all 168 tests, with the 10 nested tests ignored. No output lifecycle
 tests or live display operations were run. `.claude/` remains untracked.
+
+## 11. Automated stress runner
+
+`testbench/stress.sh` runs the project checks, nested tests, release build,
+zero-copy/shared-memory comparisons, idle/light/heavy loads, reload,
+reconnect loops, lock rejection, SIGKILL/restart cleanup and final teardown.
+It requires an already-running `testbench/nested.sh` and refuses any existing
+daemon. Markdown/JSON reports and raw samples/logs go under ignored
+`test-results/`. See `testbench/STRESS.md` for longer soak runs and limits.
+Receiver statistics now expose sequence and age in status JSON (R1.22),
+so stale or absent telemetry cannot silently pass latency checks.
+Physical-device and visual acceptance remain manual.
+
+Validation: 168 workspace tests, 10 nested tests, and 10 Python runner tests
+pass; formatting and Clippy pass. Both capture profiles completed recovery
+and cleanup checks. The final short zero-copy report is
+`test-results/verified-zero-copy/report.md`: light receiver p50/p95 13/13 ms,
+heavy 15/20 ms at 59.4 FPS, about 9% CPU. It correctly exits 1 because
+capture-to-encode p50 (9.1 ms light, 16.1 ms heavy) exceeds the 8 ms target.
+The initial comparison and the corrected light-FPS test heuristic are
+explained in `docs/spikes.md`. All test-owned processes were stopped after
+capture exit and output cleanup. No live outputs were changed.
