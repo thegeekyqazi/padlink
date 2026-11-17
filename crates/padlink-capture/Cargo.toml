@@ -7,11 +7,13 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+gbm = { workspace = true }
 memmap2 = { workspace = true }
 rustix = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wayland-client = { workspace = true }
+wayland-protocols = { workspace = true }
 wayland-protocols-wlr = { workspace = true }
 
 [dev-dependencies]

@@ -529,12 +529,14 @@ dependencies = [
 name = "padlink-capture"
 version = "0.1.0"
 dependencies = [
+ "gbm",
  "memmap2",
  "padlink-hypr",
  "rustix 1.1.6",
  "thiserror",
  "tracing",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-wlr",
 ]
 

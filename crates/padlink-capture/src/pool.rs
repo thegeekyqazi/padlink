@@ -75,25 +75,55 @@ impl Recycler {
         state.generation += 1;
     }
 
+    fn ticket(&self, index: usize) -> Ticket {
+        Ticket {
+            recycler: self.clone(),
+            index,
+            generation: self.state().generation,
+        }
+    }
+
     /// Lend out buffer `index`, whose first `len` bytes of `map` are pixels.
     pub fn lease(&self, index: usize, map: Arc<Mmap>, len: usize) -> Lease {
         assert!(len <= map.len());
         Lease {
-            recycler: self.clone(),
-            index,
-            generation: self.state().generation,
+            _ticket: self.ticket(index),
             map,
             len,
         }
     }
+
+    /// Lend out GPU buffer `index`.
+    pub fn lease_gpu(&self, index: usize, buffer: Arc<GpuBuffer>) -> GpuLease {
+        GpuLease {
+            _ticket: self.ticket(index),
+            buffer,
+        }
+    }
 }
 
-/// Read access to one frame's pixels. Dropping it frees the buffer for the
-/// next frame, so hold it only as long as the pixels are needed.
-pub struct Lease {
+/// Puts its buffer back on the free list when dropped.
+struct Ticket {
     recycler: Recycler,
     index: usize,
     generation: u64,
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        let mut state = self.recycler.state();
+        if state.generation == self.generation {
+            state.free.push(self.index);
+            drop(state);
+            self.recycler.0.returned.notify_one();
+        }
+    }
+}
+
+/// Read access to one frame's pixels in shared memory. Dropping it frees
+/// the buffer for the next frame, so hold it only as long as it is needed.
+pub struct Lease {
+    _ticket: Ticket,
     map: Arc<Mmap>,
     len: usize,
 }
@@ -106,14 +136,29 @@ impl std::ops::Deref for Lease {
     }
 }
 
-impl Drop for Lease {
-    fn drop(&mut self) {
-        let mut state = self.recycler.state();
-        if state.generation == self.generation {
-            state.free.push(self.index);
-            drop(state);
-            self.recycler.0.returned.notify_one();
-        }
+/// A single-plane GPU buffer (dmabuf) holding a 32-bit RGB picture.
+#[derive(Debug)]
+pub struct GpuBuffer {
+    pub fd: std::os::fd::OwnedFd,
+    /// The DRM format code, such as `XR24`.
+    pub fourcc: u32,
+    pub modifier: u64,
+    pub offset: u32,
+    pub stride: u32,
+}
+
+/// Access to one frame that stayed on the GPU. Dropping it frees the buffer
+/// for the next frame.
+pub struct GpuLease {
+    _ticket: Ticket,
+    buffer: Arc<GpuBuffer>,
+}
+
+impl std::ops::Deref for GpuLease {
+    type Target = GpuBuffer;
+
+    fn deref(&self) -> &GpuBuffer {
+        &self.buffer
     }
 }
 

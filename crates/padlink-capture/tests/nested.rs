@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use padlink_capture::{End, Error, Options, Path, capture, looks_black};
+use padlink_capture::{End, Error, Options, Path, Pixels, capture, looks_black};
 use padlink_hypr::{Hyprland, OutputSpec, Placement, instance, logical_size, output_name, place};
 
 struct Bench {
@@ -91,12 +91,24 @@ struct Seen {
 #[test]
 #[ignore = "needs the nested Hyprland test bench"]
 fn frames_follow_damage_and_teardown_comes_before_output_removal() {
+    frames_follow_damage("cap01", None, Path::WlrShm);
+}
+
+/// R1.12, the zero-copy path: the same behaviour with frames left on the GPU.
+#[test]
+#[ignore = "needs the nested Hyprland test bench"]
+fn zero_copy_frames_follow_damage_too() {
+    frames_follow_damage("cap02", Some("/dev/dri/renderD128".into()), Path::WlrDmabuf);
+}
+
+fn frames_follow_damage(name: &str, gpu_buffers: Option<PathBuf>, expected: Path) {
     let b = bench();
-    let spec = make_output(&b, "cap01");
+    let spec = make_output(&b, name);
     let options = Options {
         wayland_socket: b.wayland_socket.clone(),
         output: spec.name.clone(),
         cursor: true,
+        gpu_buffers,
     };
 
     let stop = AtomicBool::new(false);
@@ -110,20 +122,28 @@ fn frames_follow_damage_and_teardown_comes_before_output_removal() {
                 &stop,
                 |p| path_tx.send(p).unwrap(),
                 |frame| {
+                    let (bytes, black) = match &frame.pixels {
+                        Pixels::Cpu(pixels) => (
+                            pixels.len(),
+                            looks_black(pixels, frame.width, frame.height, frame.stride),
+                        ),
+                        // Nothing to read on the CPU: that is the point.
+                        Pixels::Gpu(buffer) => {
+                            assert_eq!(buffer.stride, frame.stride);
+                            (frame.stride as usize * frame.height as usize, false)
+                        }
+                    };
                     let _ = frames_tx.send(Seen {
                         size: (frame.width, frame.height, frame.stride),
-                        bytes: frame.pixels.len(),
-                        black: looks_black(&frame.pixels, frame.width, frame.height, frame.stride),
+                        bytes,
+                        black,
                         at: frame.captured_at,
                     });
                 },
             )
         });
 
-        assert_eq!(
-            path.recv_timeout(Duration::from_secs(5)).unwrap(),
-            Path::WlrShm
-        );
+        assert_eq!(path.recv_timeout(Duration::from_secs(5)).unwrap(), expected);
 
         // The first frame arrives without any damage.
         let first = frames
@@ -186,6 +206,7 @@ fn an_unknown_output_is_an_error_that_lists_the_real_ones() {
         wayland_socket: b.wayland_socket.clone(),
         output: "padlink-nosuch".into(),
         cursor: false,
+        gpu_buffers: None,
     };
     let err = capture(&options, &AtomicBool::new(false), |_| {}, |_| {}).unwrap_err();
     assert!(matches!(err, Error::NoOutput { .. }), "{err}");
@@ -198,6 +219,7 @@ fn a_missing_compositor_socket_is_reported_with_its_path() {
         wayland_socket: "/nonexistent/wayland-99".into(),
         output: "x".into(),
         cursor: false,
+        gpu_buffers: None,
     };
     let err = capture(&options, &AtomicBool::new(false), |_| {}, |_| {}).unwrap_err();
     assert!(err.to_string().contains("/nonexistent/wayland-99"), "{err}");

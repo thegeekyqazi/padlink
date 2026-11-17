@@ -1,4 +1,5 @@
-//! Continuous capture of one output through `wlr-screencopy-unstable-v1`
+//! Continuous capture of one output through `wlr-screencopy-unstable-v1`,
+//! into GPU buffers when asked and possible (zero-copy, R1.12), otherwise
 //! into shared-memory buffers.
 //!
 //! Per frame: `capture_output`, then the compositor describes the buffer it
@@ -19,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use memmap2::Mmap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 use wayland_protocols_wlr::screencopy::v1::client::{
@@ -27,8 +28,13 @@ use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
 };
 
-use crate::pool::{self, Recycler};
-use crate::{End, Error, Frame, Options, Path};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{
+    zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
+    zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+};
+
+use crate::pool::{self, GpuBuffer, Recycler};
+use crate::{End, Error, Frame, Options, Path, Pixels};
 
 /// Buffers that can be busy at once: one attached to the compositor, one
 /// waiting in the encoder's latest-wins slot, one being encoded, and one
@@ -45,6 +51,8 @@ const WAKE: Duration = Duration::from_millis(100);
 struct FrameState {
     /// `buffer`: format, width, height, stride.
     shm: Option<(WEnum<wl_shm::Format>, u32, u32, u32)>,
+    /// `linux_dmabuf`: DRM format code, width, height.
+    dma: Option<(u32, u32, u32)>,
     buffer_done: bool,
     ready: bool,
     failed: bool,
@@ -59,6 +67,10 @@ struct State {
     target: Option<u32>,
     output_removed: bool,
     frame: FrameState,
+    dmabuf: Option<ZwpLinuxDmabufV1>,
+    /// The answer to the last GPU buffer registration: the buffer, or
+    /// `None` inside if the compositor refused it.
+    created: Option<Option<wl_buffer::WlBuffer>>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
@@ -81,6 +93,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 "wl_output" if version >= 4 => {
                     let output = registry.bind(name, 4, qh, name);
                     state.outputs.insert(name, (output, String::new()));
+                }
+                "zwp_linux_dmabuf_v1" => {
+                    state.dmabuf = Some(registry.bind(name, version.min(3), qh, ()));
                 }
                 "zwlr_screencopy_manager_v1" => {
                     let v = version.min(3);
@@ -134,6 +149,11 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
                 height,
                 stride,
             } => f.shm = Some((format, width, height, stride)),
+            Event::LinuxDmabuf {
+                format,
+                width,
+                height,
+            } => f.dma = Some((format, width, height)),
             Event::BufferDone => f.buffer_done = true,
             Event::Ready { .. } => f.ready = true,
             Event::Failed => f.failed = true,
@@ -149,7 +169,31 @@ macro_rules! ignore_events {
         }
     )*};
 }
+impl Dispatch<ZwpLinuxBufferParamsV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &ZwpLinuxBufferParamsV1,
+        event: zwp_linux_buffer_params_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_linux_buffer_params_v1::Event::Created { buffer } => {
+                state.created = Some(Some(buffer));
+            }
+            zwp_linux_buffer_params_v1::Event::Failed => state.created = Some(None),
+            _ => {}
+        }
+    }
+
+    wayland_client::event_created_child!(State, ZwpLinuxBufferParamsV1, [
+        zwp_linux_buffer_params_v1::EVT_CREATED_OPCODE => (wl_buffer::WlBuffer, ()),
+    ]);
+}
+
 ignore_events!(
+    ZwpLinuxDmabufV1,
     wl_shm::WlShm,
     wl_shm_pool::WlShmPool,
     wl_buffer::WlBuffer,
@@ -161,7 +205,6 @@ struct ShmBuffer {
     map: Arc<Mmap>,
     pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
-    layout: (u32, u32, u32),
 }
 
 impl ShmBuffer {
@@ -187,12 +230,7 @@ impl ShmBuffer {
             qh,
             (),
         );
-        Ok(ShmBuffer {
-            map,
-            pool,
-            buffer,
-            layout: (width, height, stride),
-        })
+        Ok(ShmBuffer { map, pool, buffer })
     }
 }
 
@@ -201,6 +239,125 @@ impl Drop for ShmBuffer {
     fn drop(&mut self) {
         self.buffer.destroy();
         self.pool.destroy();
+    }
+}
+
+/// The shape of a buffer: a capture's buffers are replaced when it changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// Width, height, stride.
+    Shm(u32, u32, u32),
+    /// DRM format code, width, height.
+    Gpu(u32, u32, u32),
+}
+
+/// One GPU buffer registered with the compositor.
+struct GpuWlBuffer {
+    info: Arc<GpuBuffer>,
+    buffer: wl_buffer::WlBuffer,
+    /// Keeps the allocation alive on our side.
+    _bo: gbm::BufferObject<()>,
+}
+
+impl Drop for GpuWlBuffer {
+    /// A lease may still hold the buffer's fd; the memory lives until then.
+    fn drop(&mut self) {
+        self.buffer.destroy();
+    }
+}
+
+enum Buffer {
+    Shm(ShmBuffer),
+    Gpu(GpuWlBuffer),
+}
+
+impl Buffer {
+    fn wl(&self) -> &wl_buffer::WlBuffer {
+        match self {
+            Buffer::Shm(b) => &b.buffer,
+            Buffer::Gpu(b) => &b.buffer,
+        }
+    }
+}
+
+/// What is needed to allocate GPU buffers.
+struct GpuAllocator {
+    device: gbm::Device<File>,
+    dmabuf: ZwpLinuxDmabufV1,
+}
+
+impl GpuAllocator {
+    fn open(node: &std::path::Path, dmabuf: ZwpLinuxDmabufV1) -> Result<Self, String> {
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .open(node)
+            .map_err(|e| format!("cannot open {}: {e}", node.display()))?;
+        let device =
+            gbm::Device::new(file).map_err(|e| format!("cannot use {}: {e}", node.display()))?;
+        Ok(GpuAllocator { device, dmabuf })
+    }
+
+    /// Allocate a buffer and register it with the compositor, waiting for
+    /// its answer. A refusal is an ordinary error, not a protocol error, so
+    /// the capture can carry on with shared memory.
+    fn buffer(
+        &self,
+        conn: &Connection,
+        queue: &mut EventQueue<State>,
+        state: &mut State,
+        (fourcc, width, height): (u32, u32, u32),
+    ) -> Result<GpuWlBuffer, String> {
+        let format = gbm::Format::try_from(fourcc).map_err(|_| {
+            format!("the compositor asked for an unknown pixel format ({fourcc:#x})")
+        })?;
+        let bo = self
+            .device
+            .create_buffer_object::<()>(width, height, format, gbm::BufferObjectFlags::RENDERING)
+            .map_err(|e| format!("the GPU could not allocate a {width}x{height} buffer: {e}"))?;
+        let fd = bo
+            .fd()
+            .map_err(|e| format!("the GPU buffer could not be shared: {e}"))?;
+        let modifier: u64 = bo.modifier().into();
+        let (offset, stride) = (bo.offset(0), bo.stride());
+
+        let qh = queue.handle();
+        let params = self.dmabuf.create_params(&qh, ());
+        params.add(
+            fd.as_fd(),
+            0,
+            offset,
+            stride,
+            (modifier >> 32) as u32,
+            modifier as u32,
+        );
+        state.created = None;
+        params.create(
+            width as i32,
+            height as i32,
+            fourcc,
+            zwp_linux_buffer_params_v1::Flags::empty(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while state.created.is_none() && Instant::now() < deadline {
+            dispatch(conn, queue, state, WAKE).map_err(|e| e.to_string())?;
+        }
+        params.destroy();
+        match state.created.take() {
+            Some(Some(buffer)) => Ok(GpuWlBuffer {
+                info: Arc::new(GpuBuffer {
+                    fd,
+                    fourcc,
+                    modifier,
+                    offset,
+                    stride,
+                }),
+                buffer,
+                _bo: bo,
+            }),
+            Some(None) => Err("the compositor could not import the GPU buffer".into()),
+            None => Err("the compositor did not answer about the GPU buffer".into()),
+        }
     }
 }
 
@@ -268,7 +425,8 @@ fn dispatch(
 /// Each frame is handed to `on_frame`, which should take what it needs and
 /// return at once: the capture loop is blocked while it runs.
 ///
-/// `on_start` is called once, before the first frame, with the path in use.
+/// `on_path` is called before the first frame with the path in use, and
+/// again if capture has to fall back from GPU buffers to shared memory.
 ///
 /// When this returns, every capture object has been destroyed and the
 /// compositor has processed that, so the caller may remove the output
@@ -276,7 +434,7 @@ fn dispatch(
 pub fn capture(
     options: &Options,
     stop: &AtomicBool,
-    on_start: impl FnOnce(Path),
+    mut on_path: impl FnMut(Path),
     mut on_frame: impl FnMut(Frame),
 ) -> Result<End, Error> {
     let connect_error = |detail: String| Error::Connect {
@@ -296,6 +454,8 @@ pub fn capture(
         target: None,
         output_removed: false,
         frame: FrameState::default(),
+        dmabuf: None,
+        created: None,
     };
     // Once for the globals, once more for the outputs' names.
     queue.roundtrip(&mut state).map_err(lost)?;
@@ -324,10 +484,33 @@ pub fn capture(
         "capturing {} with wlr-screencopy version {version}",
         options.output
     );
-    on_start(Path::WlrShm);
+
+    // Zero-copy needs the render node, the dmabuf protocol, and a
+    // screencopy new enough to say which GPU format it wants.
+    let mut gpu = match (&options.gpu_buffers, state.dmabuf.clone()) {
+        (Some(node), Some(dmabuf)) if version >= 3 => match GpuAllocator::open(node, dmabuf) {
+            Ok(allocator) => Some(allocator),
+            Err(why) => {
+                warn!("zero-copy capture is off, using shared memory: {why}");
+                None
+            }
+        },
+        (Some(_), _) => {
+            warn!(
+                "zero-copy capture is off, using shared memory: the compositor does not offer it"
+            );
+            None
+        }
+        (None, _) => None,
+    };
+    // Until one GPU frame has arrived, a failure counts against the GPU
+    // path rather than against the capture.
+    let mut gpu_proven = false;
+    let mut path = None;
 
     let recycler = Recycler::default();
-    let mut buffers: Vec<ShmBuffer> = Vec::new();
+    let mut buffers: Vec<Buffer> = Vec::new();
+    let mut shape = None;
     let mut failures = 0u32;
     let stopped = || stop.load(Ordering::Relaxed);
 
@@ -372,17 +555,42 @@ pub fn capture(
         };
 
         // 2. A free buffer of that shape.
-        let layout = (width, height, stride);
-        if buffers.first().is_some_and(|b| b.layout != layout) {
+        let wanted = match (&gpu, state.frame.dma) {
+            (Some(_), Some((fourcc, w, h))) => Shape::Gpu(fourcc, w, h),
+            _ => Shape::Shm(width, height, stride),
+        };
+        if shape != Some(wanted) {
             recycler.reset();
             buffers.clear();
+            shape = Some(wanted);
+        }
+        let now = match wanted {
+            Shape::Gpu(..) => Path::WlrDmabuf,
+            Shape::Shm(..) => Path::WlrShm,
+        };
+        if path != Some(now) {
+            path = Some(now);
+            on_path(now);
         }
         let index = loop {
             if let Some(i) = recycler.take() {
                 break i;
             }
             if buffers.len() < MAX_BUFFERS {
-                buffers.push(ShmBuffer::new(&shm, &qh, layout, format)?);
+                let buffer = match (wanted, &gpu) {
+                    (Shape::Gpu(fourcc, w, h), Some(allocator)) => {
+                        match allocator.buffer(&conn, &mut queue, &mut state, (fourcc, w, h)) {
+                            Ok(buffer) => Buffer::Gpu(buffer),
+                            Err(why) => {
+                                warn!("zero-copy capture is off, using shared memory: {why}");
+                                gpu = None;
+                                continue 'capture;
+                            }
+                        }
+                    }
+                    _ => Buffer::Shm(ShmBuffer::new(&shm, &qh, (width, height, stride), format)?),
+                };
+                buffers.push(buffer);
                 debug!(
                     "capture buffer {} allocated at {width}x{height}",
                     buffers.len()
@@ -397,7 +605,7 @@ pub fn capture(
         };
 
         // 3. The copy, which completes when the output has new damage.
-        frame.copy_with_damage(&buffers[index].buffer);
+        frame.copy_with_damage(buffers[index].wl());
         while !stopped() && !state.frame.ready && !state.frame.failed && !state.output_removed {
             dispatch(&conn, &mut queue, &mut state, WAKE)?;
         }
@@ -407,20 +615,45 @@ pub fn capture(
             let captured_wall_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+            let (stride, pixels) = match &buffers[index] {
+                Buffer::Shm(b) => (
+                    stride,
+                    Pixels::Cpu(recycler.lease(
+                        index,
+                        b.map.clone(),
+                        stride as usize * height as usize,
+                    )),
+                ),
+                Buffer::Gpu(b) => {
+                    gpu_proven = true;
+                    (
+                        b.info.stride,
+                        Pixels::Gpu(recycler.lease_gpu(index, b.info.clone())),
+                    )
+                }
+            };
             on_frame(Frame {
                 width,
                 height,
                 stride,
-                pixels: recycler.lease(
-                    index,
-                    buffers[index].map.clone(),
-                    stride as usize * height as usize,
-                ),
+                pixels,
                 captured_at,
                 captured_wall_ms,
             });
         } else {
             recycler.release(index);
+            if state.frame.failed
+                && !state.output_removed
+                && !gpu_proven
+                && matches!(buffers[index], Buffer::Gpu(_))
+            {
+                // The compositor would not copy into a GPU buffer.
+                warn!(
+                    "zero-copy capture is off, using shared memory: the compositor refused the GPU buffer"
+                );
+                gpu = None;
+                continue;
+            }
             if stopped() {
                 break End::Stopped;
             }

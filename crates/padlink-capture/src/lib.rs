@@ -16,17 +16,25 @@ mod wlr;
 use std::path::PathBuf;
 use std::time::Instant;
 
-pub use pool::Lease;
+pub use pool::{GpuBuffer, GpuLease, Lease};
 pub use wlr::{capture, protocols};
 
-/// One captured frame. Pixels are 32-bit, in the byte order blue, green,
-/// red, unused (`XRGB8888` on little-endian machines).
+/// Where a frame's pixels are.
+pub enum Pixels {
+    /// In shared memory: 32-bit, in the byte order blue, green, red, unused
+    /// (`XRGB8888` on little-endian machines).
+    Cpu(Lease),
+    /// Still on the GPU, for an encoder that can take them from there.
+    Gpu(GpuLease),
+}
+
+/// One captured frame.
 pub struct Frame {
     pub width: u32,
     pub height: u32,
     /// Length of a row in bytes; may be longer than `width * 4`.
     pub stride: u32,
-    pub pixels: Lease,
+    pub pixels: Pixels,
     /// When the compositor finished the copy, for latency figures.
     pub captured_at: Instant,
     /// The same moment as wall-clock milliseconds since the Unix epoch, for
@@ -43,6 +51,11 @@ pub struct Options {
     pub output: String,
     /// Draw the pointer into the picture.
     pub cursor: bool,
+    /// Capture into GPU buffers allocated on this render node, so the
+    /// encoder can take frames without a copy (R1.12). `None` captures into
+    /// shared memory, which every encoder can read. If the compositor or
+    /// the GPU refuses, capture falls back to shared memory by itself.
+    pub gpu_buffers: Option<PathBuf>,
 }
 
 /// Which protocol and buffer type a capture uses, for the log and `status`
@@ -50,12 +63,14 @@ pub struct Options {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Path {
     WlrShm,
+    WlrDmabuf,
 }
 
 impl Path {
     pub fn label(self) -> &'static str {
         match self {
             Path::WlrShm => "wlr-screencopy, shared memory",
+            Path::WlrDmabuf => "wlr-screencopy, zero-copy GPU buffers",
         }
     }
 }
