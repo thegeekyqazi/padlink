@@ -2,7 +2,7 @@
 
 Where the work so far departs from `SPEC.md`, and where the spec's facts
 turned out to be wrong. Updated as the project goes; last update 16 Nov 2026,
-early in Phase 1. Entries D1 to D8 are about Phase 0; D9 is a proposed change to Phase 1.
+early in Phase 1. Entries D1 to D8 are about Phase 0; D9 is an agreed change to Phase 1.
 
 ## Where the work differs from the spec
 
@@ -15,7 +15,7 @@ early in Phase 1. Entries D1 to D8 are about Phase 0; D9 is a proposed change to
 | D5 | Rule 1: "Finish Phase 0 and report the spike results before writing daemon code" | The first Phase 1 crate (`padlink-usbmux`) was written after Spikes 1 to 4 but before Spike 5 was settled. Spike 4 still lacks its latency figure (D4) | Spike 5 only decides a Phase 3 item (R3.4) and the usbmuxd crate does not depend on it | None; all five spikes are now recorded |
 | D6 | Host setup: user runs `sudo dnf install mesa-va-drivers-freeworld` | Skipped | Already installed | None |
 | D8 | Not in the spec | `testbench/od-sender.sh` wraps the official sender so it can only run against the nested instance | Makes D2 enforceable, and gives the session one narrow thing to be permitted to run | None on the product |
-| D9 | R1.16: "Stylus input that arrives as `touch` works the same way"; `pencil` handling is Phase 3 (R3.4) | **Proposed, not yet agreed:** in Phase 1, also map `pencil` down, move and up to pointer motion and left button, exactly like `touch` | Spike 5 showed this receiver sends `pencil`, never `touch`, for the stylus. Without this the pencil is dead until the uinput tablet exists | The pencil works as a plain pointer from Phase 1. R3.4 later replaces it with a real tablet device. Small change in `padlink-input` |
+| D9 | R1.16: "Stylus input that arrives as `touch` works the same way"; `pencil` handling is Phase 3 (R3.4) | **Agreed by the user on 16 Nov 2026:** in Phase 1, also map `pencil` down, move and up to pointer motion and left button, exactly like `touch` | Spike 5 showed this receiver sends `pencil`, never `touch`, for the stylus. Without this the pencil is dead until the uinput tablet exists | The pencil works as a plain pointer from Phase 1. R3.4 later replaces it with a real tablet device. Small change in `padlink-input` |
 | D7 | Section 4 lists reference code to read; no location given | Cloned into `reference/`, which is git-ignored, along with the `od-sender` download | Keeps third-party source and binaries out of this repo's history | `reference/` must be re-created on a fresh clone; `docs/spikes.md` names the pinned tag |
 
 ## Where the spec's facts were wrong
@@ -34,5 +34,11 @@ machine (rule 7). They are not choices.
 
 ## Requirements changed
 
-None agreed. One change is proposed and waiting for the user: D9 widens R1.16
-to cover `pencil` messages. No requirement has been dropped.
+- **R1.16 widened (D9, agreed 16 Nov 2026):** `pencil` down, move and up drive
+  the pointer in Phase 1, like `touch`.
+- **R3.4 raised in priority:** the user wants to draw in desktop apps with the
+  pencil as on a pen-enabled laptop. That needs the uinput tablet device, so
+  R3.4 is done first among the Phase 3 items instead of fourth. The spec's
+  order (HEVC, cursor, Wi-Fi, pencil) otherwise stands.
+
+No requirement has been dropped.
