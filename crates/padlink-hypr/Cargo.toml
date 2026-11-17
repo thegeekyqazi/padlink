@@ -1,0 +1,18 @@
+[package]
+name = "padlink-hypr"
+description = "Hyprland IPC for padlink: create, configure and remove the headless output, read monitors, detect version and config dialect."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
