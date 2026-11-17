@@ -102,6 +102,11 @@ pub struct Status {
     /// Capture to display, as measured by the receiver.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_to_end: Option<Latency>,
+    /// Number of receiver statistics messages in this session (R1.22).
+    pub receiver_stats_sequence: u64,
+    /// Age at the last status publication; absent before receiver telemetry arrives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receiver_stats_age_ms: Option<f64>,
     /// Frames replaced by a newer one before they were encoded.
     pub frames_replaced: u64,
 }
@@ -171,7 +176,10 @@ mod tests {
     #[test]
     fn an_idle_status_is_short_and_round_trips() {
         let json = serde_json::to_string(&Status::default()).unwrap();
-        assert_eq!(json, r#"{"state":"idle","frames_replaced":0}"#);
+        assert_eq!(
+            json,
+            r#"{"state":"idle","receiver_stats_sequence":0,"frames_replaced":0}"#
+        );
         assert_eq!(
             serde_json::from_str::<Status>(&json).unwrap(),
             Status::default()

@@ -173,6 +173,8 @@ struct Figures {
     bytes: u64,
     keyframes: u64,
     receiver: Option<LinkStats>,
+    receiver_updated: Option<Instant>,
+    receiver_stats_sequence: u64,
 }
 
 pub struct Session<'a, R: Receiver> {
@@ -383,6 +385,8 @@ impl<'a, R: Receiver> Session<'a, R> {
                 }
                 Action::Stats(stats) => {
                     self.figures.receiver = Some(stats);
+                    self.figures.receiver_updated = Some(Instant::now());
+                    self.figures.receiver_stats_sequence += 1;
                     None
                 }
                 Action::Sleeping => Some(SessionEnd::ReceiverSleeping),
@@ -504,6 +508,10 @@ impl<'a, R: Receiver> Session<'a, R> {
                 p95_ms: r.e2e_p95_ms?,
             })
         });
+        status.receiver_stats_sequence = f.receiver_stats_sequence;
+        status.receiver_stats_age_ms = f
+            .receiver_updated
+            .map(|t| t.elapsed().as_secs_f64() * 1000.0);
         status.frames_replaced = self.pipeline.as_ref().map_or(0, |p| p.slot.dropped());
     }
 
