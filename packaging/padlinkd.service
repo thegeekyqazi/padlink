@@ -1,0 +1,27 @@
+# systemd user unit for padlinkd (SPEC.md R2.1).
+#
+#   cp packaging/padlinkd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now padlinkd
+#
+# ExecStart assumes `cargo install`; a package would use /usr/bin/padlinkd.
+# If your Hyprland does not start graphical-session.target, add this line to
+# your Hyprland config instead of enabling the unit:
+#   exec-once = systemctl --user start padlinkd
+
+[Unit]
+Description=padlink: iPad as an extended Hyprland monitor over USB
+Documentation=https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.cargo/bin/padlinkd
+# SIGTERM makes padlinkd remove the iPad's display before it exits.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
