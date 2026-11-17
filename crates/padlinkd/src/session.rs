@@ -29,6 +29,9 @@ use padlink_input::{Injector, Target};
 use padlink_proto::{Action, Codec, DisplayRequest, LinkStats, Now, Receiver, plan_stream};
 use tracing::{debug, error, info, warn};
 
+use padlink_config::runtime::{Latency, State};
+
+use crate::control::Shared;
 use crate::slot::{Slot, Work};
 use crate::stats::{Samples, describe};
 
@@ -160,6 +163,9 @@ pub struct Session<'a, R: Receiver> {
     started: Instant,
     figures: Figures,
     last_report: Instant,
+    shared: Arc<Shared>,
+    /// Frames and bytes since the status was last published.
+    published: (Instant, u64, u64),
 }
 
 impl<'a, R: Receiver> Session<'a, R> {
@@ -171,6 +177,7 @@ impl<'a, R: Receiver> Session<'a, R> {
         config: &'a SessionConfig,
         hypr: &'a Hyprland,
         dialect: Dialect,
+        shared: Arc<Shared>,
     ) -> std::io::Result<Self> {
         let writer = transport.try_clone()?;
         // A write that cannot make progress for this long means the link is
@@ -192,6 +199,8 @@ impl<'a, R: Receiver> Session<'a, R> {
             started: Instant::now(),
             figures: Figures::default(),
             last_report: Instant::now(),
+            shared,
+            published: (Instant::now(), 0, 0),
         })
     }
 
@@ -203,11 +212,15 @@ impl<'a, R: Receiver> Session<'a, R> {
     }
 
     /// Run until the session ends, then tear everything down.
-    pub fn run(mut self, stop: &AtomicBool) -> SessionEnd {
+    ///
+    /// `stop` is asked several times a second; when it says yes the session
+    /// ends with [`SessionEnd::Stopped`].
+    pub fn run(mut self, stop: impl Fn() -> bool) -> SessionEnd {
         self.receiver.connected(self.now());
+        self.shared.status().state = State::Handshake;
         let mut last_tick = Instant::now();
         let end = loop {
-            if stop.load(Ordering::Relaxed) {
+            if stop() {
                 break SessionEnd::Stopped;
             }
             let outcome = match self.events.recv_timeout(Duration::from_millis(50)) {
@@ -233,6 +246,7 @@ impl<'a, R: Receiver> Session<'a, R> {
                     break end;
                 }
                 self.report();
+                self.publish();
             }
         };
         info!("session ended: {end:?}");
@@ -308,6 +322,8 @@ impl<'a, R: Receiver> Session<'a, R> {
             f.frames += 1;
             f.bytes += packet.data.len() as u64;
             f.keyframes += u64::from(packet.keyframe);
+            self.published.1 += 1;
+            self.published.2 += packet.data.len() as u64;
             f.prepare.add(packet.prepare_ms);
             f.encode.add(packet.encode_ms);
             f.encoded_to_sent
@@ -317,6 +333,35 @@ impl<'a, R: Receiver> Session<'a, R> {
             }
         }
         end
+    }
+
+    /// Refresh the figures `padlink status` shows, once a second (R1.22).
+    fn publish(&mut self) {
+        let (since, frames, bytes) = self.published;
+        let secs = since.elapsed().as_secs_f64();
+        if secs < 1.0 || self.pipeline.is_none() {
+            return;
+        }
+        self.published = (Instant::now(), 0, 0);
+        let pair = |s: &Samples| {
+            Some(Latency {
+                p50_ms: s.percentile(0.5)?,
+                p95_ms: s.percentile(0.95)?,
+            })
+        };
+        let f = &self.figures;
+        let mut status = self.shared.status();
+        status.fps = Some((frames as f64 / secs * 10.0).round() / 10.0);
+        status.bitrate_mbps = Some((bytes as f64 * 8.0 / secs / 1e5).round() / 10.0);
+        status.capture_to_encoded = pair(&f.capture_to_encoded);
+        status.encoded_to_sent = pair(&f.encoded_to_sent);
+        status.end_to_end = f.receiver.as_ref().and_then(|r| {
+            Some(Latency {
+                p50_ms: r.e2e_p50_ms?,
+                p95_ms: r.e2e_p95_ms?,
+            })
+        });
+        status.frames_replaced = self.pipeline.as_ref().map_or(0, |p| p.slot.dropped());
     }
 
     /// One line every five seconds with the per-stage numbers (section 9).
@@ -404,6 +449,7 @@ impl<'a, R: Receiver> Session<'a, R> {
             warn!("not using {}: {why}", kind.label());
         }
         let encoder = opened.encoder;
+        let encoder_label = encoder.kind().label().to_string();
         info!("encoder: {}", encoder.describe());
 
         // R1.11: creating an output takes focus; hand it back.
@@ -457,7 +503,18 @@ impl<'a, R: Receiver> Session<'a, R> {
             stop_capture.clone(),
             slot.clone(),
             self.events_tx.clone(),
+            self.shared.clone(),
         );
+        {
+            let mut status = self.shared.status();
+            status.state = State::Streaming;
+            status.message = None;
+            status.device = request.device_name.clone();
+            status.transport = Some("USB".into());
+            status.output = Some(spec.name.clone());
+            status.encoder = Some(encoder_label);
+            status.resolution = Some(format!("{}x{}", plan.width, plan.height));
+        }
 
         let pipeline = Pipeline {
             output: spec.name,
@@ -505,6 +562,7 @@ fn spawn_capture(
     stop: Arc<AtomicBool>,
     slot: Arc<Slot<Frame>>,
     events: mpsc::SyncSender<Event>,
+    shared: Arc<Shared>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("padlink-capture".into())
@@ -513,7 +571,10 @@ fn spawn_capture(
             let result = padlink_capture::capture(
                 &options,
                 &stop,
-                |path| info!("capture: {}", path.label()),
+                |path| {
+                    info!("capture: {}", path.label());
+                    shared.status().capture = Some(path.label().to_string());
+                },
                 |frame| {
                     if std::mem::take(&mut first)
                         && padlink_capture::looks_black(
