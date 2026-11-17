@@ -3,3 +3,4 @@ target/
 *.h264
 *.log
 .claude/settings.local.json
+__pycache__/
