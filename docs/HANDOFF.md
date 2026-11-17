@@ -52,9 +52,8 @@ Already installed: `mesa-va-drivers-freeworld`, `libavcodec-freeworld`
 `libswscale` headers, `libva-devel`, `libdrm-devel`, `wayland-devel`,
 `libusbmuxd-utils`, `wf-recorder`, `foot`. Rust 1.95.
 
-Not installed and needed for zero-copy capture: `mesa-libgbm-devel`. The
-user was asked on 16 Nov 2026 to run `sudo dnf install mesa-libgbm-devel`;
-check with `rpm -q mesa-libgbm-devel` before starting that work.
+`mesa-libgbm-devel` is installed (26.2.6-1.fc44.x86_64, rechecked by Codex
+on 16 Nov 2026).
 
 ## 3. Layout
 
@@ -63,7 +62,7 @@ crates/
   padlink-usbmux    usbmuxd client: list devices, hotplug events, tunnel to a port
   padlink-proto     Receiver trait; OpenDisplay protocol 3 sender; stream planning
   padlink-hypr      Hyprland IPC: instance discovery, layout maths, output lifecycle
-  padlink-capture   wlr-screencopy into leased shared-memory buffers
+  padlink-capture   wlr-screencopy into leased GPU or shared-memory buffers
   padlink-encode    h264_vaapi, x264, OpenH264 through raw FFmpeg bindings
   padlink-input     touch, stylus and scroll as a virtual pointer on the output
   padlink-config    ~/.config/padlink/config.toml, strict keys
@@ -127,7 +126,7 @@ is `padlink-<last 6 characters of the UDID>`.
 ```sh
 cargo test --workspace                 # unit and fake-socket tests, real encodes
 testbench/nested.sh                    # terminal 1: nested Hyprland in a window
-testbench/run-nested-tests.sh          # terminal 2: the 8 tests that create outputs
+testbench/run-nested-tests.sh          # terminal 2: the nested output/capture tests
 testbench/padlinkd.sh                  # terminal 2: the daemon, against the nested instance
 testbench/padlink.sh status            # terminal 3: the CLI, with the nested environment
 testbench/wiggle.sh 12                 # light load: moves the pointer on the padlink output
@@ -239,8 +238,8 @@ In the order I would do it. Each item names the files and the approach.
    `cargo run --release -p padlink-encode --example bench rc_mode=CQP`
    and `BAND=8` for a thin changing strip.
 8. **CI**: `.github/workflows/ci.yml` exists (Fedora container, fmt,
-   clippy, tests) but has never run: there is no remote. Expect to fix it
-   on first push.
+   clippy, tests). The public GitHub remote is now configured; check the
+   first workflow run after the initial push.
 
 Phase 1's commands work in the nested bench. Phase 1 is done when `padlink connect` extends the desktop with hardware
 encoding and working touch, and `padlink disconnect` leaves the session as
@@ -269,7 +268,7 @@ Phase 2 (SPEC.md section 6) item by item:
 Then section 7.
 For Phase 3 the order is R3.4 (uinput tablet for the pencil) first, then
 the spec's order. Rotation already rebuilds the display on a second
-`hello`; only the debounce (R2.7) is missing.
+`hello`, with debounce (R2.7) implemented.
 
 ## 8. Known problems and loose ends
 
@@ -282,3 +281,25 @@ the spec's order. Rotation already rebuilds the display on a second
 - `.claude/settings.json` (a Claude Code permission rule) is untracked on
   purpose.
 - `spikes/__pycache__` is ignored; delete it freely.
+
+## 9. Codex takeover review, 16 Nov 2026
+
+Read the repository and shared handoffs, SPEC.md, deviations, acceptance
+procedure and measurements. At review time, `pgrep -a padlinkd` found no
+running daemon; recheck before any bench streaming. HEAD was `01ef3e3`,
+with no configured remote and only the intentionally untracked `.claude/`
+directory in the initial worktree status. No implementation changes,
+streaming, output operations or tests were performed during this review.
+The 168 passing tests and 10 nested tests above are Claude's recorded
+results, not a fresh Codex run. Next: baseline checks, then measure the
+zero-copy path in the nested bench with the iPad available, and complete
+user-observed acceptance checks.
+
+## 10. GitHub publication, 16 Nov 2026
+
+At the user's request, created the public repository
+https://github.com/thegeekyqazi/padlink and configured `origin` to use HTTPS.
+Before publication, formatting and workspace Clippy passed. The sandboxed
+test run failed because the GPU render device was unavailable; the host run
+passed all 168 tests, with the 10 nested tests ignored. No output lifecycle
+tests or live display operations were run. `.claude/` remains untracked.
