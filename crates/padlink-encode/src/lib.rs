@@ -133,6 +133,12 @@ pub struct Opened {
     pub skipped: Vec<(Kind, String)>,
 }
 
+/// Whether this FFmpeg build contains the encoder at all. It may still fail
+/// to open, for example with no GPU driver; [`Encoder::open`] tells.
+pub fn is_built_in(kind: Kind) -> bool {
+    ff::has_encoder(kind.codec_name())
+}
+
 pub struct Encoder {
     kind: Kind,
     settings: Settings,

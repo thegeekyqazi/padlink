@@ -464,6 +464,36 @@ fn scopeguard(frame: ZwlrScreencopyFrameV1) -> FrameGuard {
     FrameGuard(frame)
 }
 
+/// The names of the protocols the compositor offers, for `padlink doctor`.
+pub fn protocols(wayland_socket: &std::path::Path) -> Result<Vec<String>, Error> {
+    struct Names(Vec<String>);
+    impl Dispatch<wl_registry::WlRegistry, ()> for Names {
+        fn event(
+            names: &mut Self,
+            _: &wl_registry::WlRegistry,
+            event: wl_registry::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_registry::Event::Global { interface, .. } = event {
+                names.0.push(interface);
+            }
+        }
+    }
+    let connect_error = |detail: String| Error::Connect {
+        path: wayland_socket.to_path_buf(),
+        detail,
+    };
+    let stream = UnixStream::connect(wayland_socket).map_err(|e| connect_error(e.to_string()))?;
+    let conn = Connection::from_socket(stream).map_err(|e| connect_error(e.to_string()))?;
+    let mut queue = conn.new_event_queue::<Names>();
+    conn.display().get_registry(&queue.handle(), ());
+    let mut names = Names(Vec::new());
+    queue.roundtrip(&mut names).map_err(lost)?;
+    Ok(names.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

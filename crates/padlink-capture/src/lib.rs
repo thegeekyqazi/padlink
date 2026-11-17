@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 pub use pool::Lease;
-pub use wlr::capture;
+pub use wlr::{capture, protocols};
 
 /// One captured frame. Pixels are 32-bit, in the byte order blue, green,
 /// red, unused (`XRGB8888` on little-endian machines).
