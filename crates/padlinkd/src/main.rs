@@ -95,7 +95,7 @@ fn run() -> Result<(), String> {
         placement: Placement::Right,
         fps: 60,
         bitrate_bps: 25_000_000,
-        encoder: Backend::Auto,
+        encoder: encoder_override(),
         render_node: "/dev/dri/renderD128".into(),
         cursor: true,
         wayland_socket: runtime.join(&instance.wl_socket),
@@ -122,6 +122,17 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         SessionEnd::Stopped => Ok(()),
+    }
+}
+
+/// `PADLINK_ENCODER=vaapi|x264|openh264` picks the encoder until the config
+/// file exists. Anything else, or nothing, means automatic.
+fn encoder_override() -> Backend {
+    match std::env::var("PADLINK_ENCODER").as_deref() {
+        Ok("vaapi") => Backend::Vaapi,
+        Ok("x264") => Backend::X264,
+        Ok("openh264") => Backend::OpenH264,
+        _ => Backend::Auto,
     }
 }
 
