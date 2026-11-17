@@ -15,8 +15,8 @@ mod stats;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use control::Shared;
@@ -109,6 +109,7 @@ fn run() -> Result<(), String> {
     let mut message: Option<String> = None;
     let mut usbmuxd_down = false;
     let mut paused_because: Option<String> = None;
+    let workspaces = Arc::new(Mutex::new(Vec::new()));
 
     while !stop.load(Ordering::Relaxed) {
         // What the user wants.
@@ -186,7 +187,13 @@ fn run() -> Result<(), String> {
         machine.on(Event::DialSucceeded);
         info!("connected to the receiver over USB");
 
-        let session_config = session_config(&config, d, &wayland_socket, &instance.event_socket());
+        let session_config = session_config(
+            &config,
+            d,
+            &wayland_socket,
+            &instance.event_socket(),
+            &workspaces,
+        );
         let session = Session::new(
             OpenDisplay::new(),
             transport,
@@ -241,6 +248,7 @@ fn session_config(
     device: &Device,
     wayland_socket: &Path,
     hypr_events: &Path,
+    workspaces: &Arc<Mutex<Vec<String>>>,
 ) -> SessionConfig {
     SessionConfig {
         output_name: output_name(&device.short_id()),
@@ -264,6 +272,7 @@ fn session_config(
         cursor: true,
         wayland_socket: wayland_socket.to_path_buf(),
         hypr_events: hypr_events.to_path_buf(),
+        workspaces: workspaces.clone(),
     }
 }
 

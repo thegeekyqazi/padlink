@@ -16,9 +16,9 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -53,6 +53,9 @@ pub struct SessionConfig {
     pub wayland_socket: PathBuf,
     /// Hyprland's event socket (`.socket2.sock`).
     pub hypr_events: PathBuf,
+    /// The workspaces that were on the display when it last went away, to
+    /// be moved back when it returns (R2.4). Outlives the session.
+    pub workspaces: Arc<Mutex<Vec<String>>>,
 }
 
 /// Why a session ended.
@@ -113,7 +116,11 @@ impl Pipeline {
     /// Stop capture and wait for its objects to be destroyed, then remove
     /// the output. Never the reverse: Hyprland 0.56.2 aborts when an output
     /// is removed under a capture (SPEC.md section 8).
-    fn teardown(mut self, hypr: &Hyprland) {
+    fn teardown(mut self, hypr: &Hyprland, workspaces: &Mutex<Vec<String>>) {
+        // R2.4: note which workspaces are here before they are moved away.
+        if let Ok(here) = hypr.workspaces_on(&self.output) {
+            *workspaces.lock().unwrap_or_else(|e| e.into_inner()) = here;
+        }
         // Release any held button while the output still exists (R1.17).
         self.injector.take();
         self.stop_capture.store(true, Ordering::Relaxed);
@@ -302,7 +309,7 @@ impl<'a, R: Receiver> Session<'a, R> {
         self.alive.store(false, Ordering::Relaxed);
         self.receiver.disconnected();
         if let Some(pipeline) = self.pipeline.take() {
-            pipeline.teardown(self.hypr);
+            pipeline.teardown(self.hypr, &self.config.workspaces);
         }
         let _ = self.writer.shutdown(std::net::Shutdown::Both);
         end
@@ -520,7 +527,7 @@ impl<'a, R: Receiver> Session<'a, R> {
     fn rebuild(&mut self, request: &DisplayRequest) -> Option<SessionEnd> {
         if let Some(old) = self.pipeline.take() {
             info!("the receiver changed its display; rebuilding");
-            old.teardown(self.hypr);
+            old.teardown(self.hypr, &self.config.workspaces);
         }
         match self.build(request) {
             Ok(pipeline) => {
@@ -575,6 +582,24 @@ impl<'a, R: Receiver> Session<'a, R> {
             .hypr
             .create_output(self.dialect, &spec)
             .map_err(|e| e.to_string())?;
+        // R2.4: bring back the workspaces that were here last time. Empty
+        // ones were deleted by Hyprland in the meantime and are skipped.
+        let remembered = self
+            .config
+            .workspaces
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        for workspace in &remembered {
+            match self
+                .hypr
+                .move_workspace(self.dialect, workspace, &spec.name)
+            {
+                Ok(true) => info!("moved workspace {workspace} back to {}", spec.name),
+                Ok(false) => {}
+                Err(e) => warn!("{e}"),
+            }
+        }
         if let Err(e) = self.hypr.restore_focus(self.dialect, &focus) {
             warn!("could not put focus back where it was: {e}");
         }
@@ -651,7 +676,7 @@ impl<'a, R: Receiver> Session<'a, R> {
         // R1.6: announce the stream before the first frame.
         let actions = self.receiver.announce_stream(&plan);
         if let Some(end) = self.perform(actions) {
-            pipeline.teardown(self.hypr);
+            pipeline.teardown(self.hypr, &self.config.workspaces);
             return Err(format!("{end:?}"));
         }
         self.figures = Figures::default();
