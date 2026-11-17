@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/padlink-usbmux"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+rust-version = "1.85"
+
+[workspace.dependencies]
+padlink-usbmux = { path = "crates/padlink-usbmux" }
+plist = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
