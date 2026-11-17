@@ -4,8 +4,8 @@ For whoever continues this project, human or agent. It assumes you have not
 seen the earlier conversation. Keep it current: update the "State" and "What
 is left" sections whenever you finish something.
 
-Last updated: 16 Nov 2026, after notifications (R2.9) and suspend
-detection (R2.6). 163 tests pass, plus 9 in the nested bench.
+Last updated: 16 Nov 2026, after compositor-restart handling (R2.8).
+163 tests pass, plus 9 in the nested bench. 72 commits on `main`.
 
 **Where things stand in one paragraph:** every Phase 1 command works in the
 nested bench against the real iPad. Nothing has run on the user's live
@@ -238,11 +238,9 @@ In the order I would do it. Each item names the files and the approach.
    `rc_mode=CQP` with `max_frame_size`, using
    `cargo run --release -p padlink-encode --example bench rc_mode=CQP`
    and `BAND=8` for a thin changing strip.
-8. **CI**: a GitHub Actions workflow with `cargo fmt --check`, clippy and
-   tests. The encode tests skip backends that cannot open; the FFmpeg
-   headers must be installed in the runner.
-9. A `README.md`: install, usage, the foreground-app limit (SPEC.md section
-   6), and credit to OpenDisplay for the adapted code.
+8. **CI**: `.github/workflows/ci.yml` exists (Fedora container, fmt,
+   clippy, tests) but has never run: there is no remote. Expect to fix it
+   on first push.
 
 Phase 1's commands work in the nested bench. Phase 1 is done when `padlink connect` extends the desktop with hardware
 encoding and working touch, and `padlink disconnect` leaves the session as
@@ -263,7 +261,7 @@ Phase 2 (SPEC.md section 6) item by item:
 | R2.5 config reloads | Built and tested nested |
 | R2.6 suspend and resume | Built differently (deviation D12): `suspend.rs` notices a suspend afterwards and the session restarts. **Untested with a real suspend** |
 | R2.7 rotation debounce | Built (`debounce.rs`); a real rotation rebuilt the display as 1640x2360 and back |
-| R2.8 compositor restart | Not built: the daemon holds one `Hyprland` handle for its lifetime. Instance discovery without the env variable works |
+| R2.8 compositor restart | Built (`Desktop::attach` in `main.rs`). Tested nested: killing the compositor under a stream ends the session cleanly and, in the bench, stops the daemon. **The re-attach half is untested**, because outside the bench it attaches to the live session |
 | R2.9 notifications | Built with `notify-send` (`notify.rs`), `notifications` config key. Silent in the nested bench. **Never seen on screen yet** |
 | R2.10 doctor | Built |
 | R2.11 RPM packaging | Not built |
@@ -278,6 +276,9 @@ the spec's order. Rotation already rebuilds the display on a second
 - The `cursor` option of R3.2 does not exist; the pointer is always drawn
   into the video.
 - `padlinkd` picks the first USB device; several iPads are out of scope.
+- `PADLINK_TESTBENCH=1` (set by the bench scripts) changes two things in
+  `padlinkd`: no desktop notifications, and no fallback to another
+  Hyprland instance. Keep both; the second one protects the live session.
 - `.claude/settings.json` (a Claude Code permission rule) is untracked on
   purpose.
 - `spikes/__pycache__` is ignored; delete it freely.
