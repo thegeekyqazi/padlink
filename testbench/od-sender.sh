@@ -5,6 +5,7 @@
 #
 #   testbench/od-sender.sh doctor
 #   testbench/od-sender.sh run --to 127.0.0.1:9000
+#   testbench/od-sender.sh --debug run      # with control messages logged
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 env_file="${XDG_RUNTIME_DIR:?}/padlink-testbench/env"
@@ -22,4 +23,6 @@ source "$env_file"
     || { echo "refusing: target is the live Hyprland session" >&2; exit 1; }
 hyprctl -i "$HYPRLAND_INSTANCE_SIGNATURE" version >/dev/null \
     || { echo "nested instance in $env_file is gone: restart testbench/nested.sh" >&2; exit 1; }
+# --debug as the first argument turns on od-sender's debug log (RUST_LOG).
+if [[ "${1:-}" == "--debug" ]]; then shift; export RUST_LOG=debug; fi
 exec "$bin" "$@"
