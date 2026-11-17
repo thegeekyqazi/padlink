@@ -7,6 +7,7 @@
 //! and exit.
 
 mod control;
+mod debounce;
 mod machine;
 mod session;
 mod slot;

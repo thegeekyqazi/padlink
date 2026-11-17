@@ -32,6 +32,7 @@ use tracing::{debug, error, info, warn};
 use padlink_config::runtime::{Latency, State};
 
 use crate::control::Shared;
+use crate::debounce::Debounce;
 use crate::slot::{Slot, Work};
 use crate::stats::{Samples, describe};
 
@@ -182,6 +183,8 @@ pub struct Session<'a, R: Receiver> {
     losses: Vec<Instant>,
     /// Cleared when the session ends, so helper threads stop.
     alive: Arc<AtomicBool>,
+    /// A changed display request waiting out its debounce.
+    rotation: Debounce<DisplayRequest>,
 }
 
 impl<'a, R: Receiver> Session<'a, R> {
@@ -223,6 +226,7 @@ impl<'a, R: Receiver> Session<'a, R> {
             last_drift_check: Instant::now(),
             losses: Vec::new(),
             alive,
+            rotation: Debounce::default(),
         })
     }
 
@@ -267,6 +271,11 @@ impl<'a, R: Receiver> Session<'a, R> {
             if let Some(end) = outcome {
                 break end;
             }
+            if let Some(display) = self.rotation.take_due(Instant::now()) {
+                if let Some(end) = self.rebuild(&display) {
+                    break end;
+                }
+            }
             // Also compare the live settings every two seconds, in case
             // something changed them without a reload event.
             let drifted = self.last_drift_check.elapsed() >= Duration::from_secs(2) && {
@@ -309,7 +318,22 @@ impl<'a, R: Receiver> Session<'a, R> {
         for action in actions {
             let end = match action {
                 Action::Send(bytes) => self.send(&bytes),
-                Action::Display(display) => self.rebuild(&display),
+                // The first display is built at once; a change to an
+                // existing one (rotation) is debounced (R2.7).
+                Action::Display(display) if self.pipeline.is_none() => self.rebuild(&display),
+                Action::Display(display) => {
+                    let same_size = self.pipeline.as_ref().is_some_and(|p| {
+                        (p.spec.width, p.spec.height) == (display.width, display.height)
+                    });
+                    if same_size {
+                        // A repeated `hello` for another reason, such as a
+                        // changed address list: nothing to rebuild.
+                        debug!("the receiver repeated its hello with the same size");
+                    } else {
+                        self.rotation.push(display, Instant::now());
+                    }
+                    None
+                }
                 Action::Keyframe => {
                     if let Some(p) = &self.pipeline {
                         p.slot.request_keyframe();
