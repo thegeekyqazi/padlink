@@ -118,6 +118,9 @@ pub struct Config {
     pub autoconnect: bool,
     /// Desktop notifications for connected, disconnected and errors (R2.9).
     pub notifications: bool,
+    /// Hand frames to the GPU encoder without copying them through the CPU
+    /// (R1.12). Falls back by itself if the GPU or compositor refuses.
+    pub zero_copy: bool,
 }
 
 impl Default for Config {
@@ -132,6 +135,7 @@ impl Default for Config {
             capture: Capture::Auto,
             autoconnect: true,
             notifications: true,
+            zero_copy: true,
         }
     }
 }
@@ -249,6 +253,7 @@ mod tests {
             capture = "wlr"
             autoconnect = false
             notifications = false
+            zero-copy = false
             "#,
         )
         .unwrap();
@@ -264,6 +269,7 @@ mod tests {
                 capture: Capture::Wlr,
                 autoconnect: false,
                 notifications: false,
+                zero_copy: false,
             }
         );
     }

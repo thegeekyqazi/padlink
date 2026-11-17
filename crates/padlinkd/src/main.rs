@@ -332,6 +332,7 @@ fn session_config(
         },
         render_node: render_node(config),
         cursor: true,
+        zero_copy: config.zero_copy,
         wayland_socket: wayland_socket.to_path_buf(),
         hypr_events: hypr_events.to_path_buf(),
         workspaces: workspaces.clone(),

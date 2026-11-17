@@ -14,6 +14,7 @@
 //! in the slot: frames are dropped, nothing queues.
 
 use std::io::{Read, Write};
+use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,8 +23,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use padlink_capture::{Frame, Options as CaptureOptions};
-use padlink_encode::{Backend, Encoder, Settings as EncoderSettings};
+use padlink_capture::{Frame, Options as CaptureOptions, Pixels};
+use padlink_encode::{Backend, Dmabuf, Encoder, Settings as EncoderSettings};
 use padlink_hypr::{Dialect, Hyprland, OutputSpec, Placement, logical_size, place};
 use padlink_input::{Injector, Target};
 use padlink_proto::{Action, Codec, DisplayRequest, LinkStats, Now, Receiver, plan_stream};
@@ -51,6 +52,8 @@ pub struct SessionConfig {
     pub render_node: PathBuf,
     /// Draw the pointer into the video.
     pub cursor: bool,
+    /// Capture into GPU buffers when the encoder can take them (R1.12).
+    pub zero_copy: bool,
     /// The compositor's Wayland socket.
     pub wayland_socket: PathBuf,
     /// Hyprland's event socket (`.socket2.sock`).
@@ -602,6 +605,7 @@ impl<'a, R: Receiver> Session<'a, R> {
         }
         let encoder = opened.encoder;
         let encoder_label = encoder.kind().label().to_string();
+        let takes_gpu_buffers = encoder.takes_gpu_buffers();
         info!("encoder: {}", encoder.describe());
 
         // R1.11: creating an output takes focus; hand it back.
@@ -674,6 +678,9 @@ impl<'a, R: Receiver> Session<'a, R> {
                 wayland_socket: config.wayland_socket.clone(),
                 output: spec.name.clone(),
                 cursor: config.cursor,
+                // Only the GPU encoder can take GPU buffers.
+                gpu_buffers: (config.zero_copy && takes_gpu_buffers)
+                    .then(|| config.render_node.clone()),
             },
             stop_capture.clone(),
             slot.clone(),
@@ -752,13 +759,16 @@ fn spawn_capture(
                     shared.status().capture = Some(path.label().to_string());
                 },
                 |frame| {
-                    if std::mem::take(&mut first)
-                        && padlink_capture::looks_black(
-                            &frame.pixels,
+                    let black = |pixels: &[u8]| {
+                        padlink_capture::looks_black(
+                            pixels,
                             frame.width,
                             frame.height,
                             frame.stride,
                         )
+                    };
+                    if std::mem::take(&mut first)
+                        && matches!(&frame.pixels, Pixels::Cpu(pixels) if black(pixels))
                     {
                         // Normal for an empty output, but also what
                         // Hyprland sends when capture is not permitted.
@@ -844,8 +854,21 @@ fn spawn_encoder(
                             }
                             continue;
                         }
-                        let result =
-                            encoder.encode_bgrx(&item.pixels, item.stride as usize, keyframe);
+                        let result = match &item.pixels {
+                            Pixels::Cpu(pixels) => {
+                                encoder.encode_bgrx(pixels, item.stride as usize, keyframe)
+                            }
+                            Pixels::Gpu(buffer) => encoder.encode_dmabuf(
+                                &Dmabuf {
+                                    fd: buffer.fd.as_fd(),
+                                    fourcc: buffer.fourcc,
+                                    modifier: buffer.modifier,
+                                    offset: buffer.offset,
+                                    stride: buffer.stride,
+                                },
+                                keyframe,
+                            ),
+                        };
                         // The lease on the capture buffer ends here.
                         (result, Some((item.captured_at, item.captured_wall_ms)))
                     }

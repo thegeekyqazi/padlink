@@ -33,6 +33,11 @@ capture = "auto"
 # until you run `padlink connect`.
 autoconnect = true
 
+# Hand frames to the GPU encoder without copying them through the CPU.
+# padlink falls back to copying by itself when that is not possible; set
+# false only to compare or to work around a driver problem.
+zero-copy = true
+
 # Desktop notifications when the iPad connects, disconnects or fails.
 notifications = true
 
