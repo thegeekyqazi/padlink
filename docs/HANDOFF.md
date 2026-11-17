@@ -4,8 +4,8 @@ For whoever continues this project, human or agent. It assumes you have not
 seen the earlier conversation. Keep it current: update the "State" and "What
 is left" sections whenever you finish something.
 
-Last updated: 16 Nov 2026, after rotation debounce (R2.7) and workspace
-memory (R2.4). 158 tests pass, plus 9 in the nested bench.
+Last updated: 16 Nov 2026, after notifications (R2.9) and suspend
+detection (R2.6). 163 tests pass, plus 9 in the nested bench.
 
 **Where things stand in one paragraph:** every Phase 1 command works in the
 nested bench against the real iPad. Nothing has run on the user's live
@@ -261,10 +261,10 @@ Phase 2 (SPEC.md section 6) item by item:
 | R2.3 reconnect | Built in `machine.rs`: redial after `sleeping`, `closing`, a dropped link. Unverified with a real lock or unplug |
 | R2.4 workspace memory | Built and checked nested: workspaces with windows return on reconnect and after rotation. The optional `workspace = "..."` pin in the config is not built |
 | R2.5 config reloads | Built and tested nested |
-| R2.6 suspend and resume | Not built (logind `PrepareForSleep`) |
+| R2.6 suspend and resume | Built differently (deviation D12): `suspend.rs` notices a suspend afterwards and the session restarts. **Untested with a real suspend** |
 | R2.7 rotation debounce | Built (`debounce.rs`); a real rotation rebuilt the display as 1640x2360 and back |
 | R2.8 compositor restart | Not built: the daemon holds one `Hyprland` handle for its lifetime. Instance discovery without the env variable works |
-| R2.9 notifications | Not built |
+| R2.9 notifications | Built with `notify-send` (`notify.rs`), `notifications` config key. Silent in the nested bench. **Never seen on screen yet** |
 | R2.10 doctor | Built |
 | R2.11 RPM packaging | Not built |
 

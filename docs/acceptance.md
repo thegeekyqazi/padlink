@@ -52,9 +52,12 @@ should do at this point.
 | 4 | Lock the iPad, unlock it | Display goes away, comes back after unlock, and workspaces that had windows on it move back |
 | 5 | Unplug | Windows move to the laptop screen; `hyprctl monitors` shows no `padlink-*` |
 | 6 | `hyprctl reload` during a session | Stream continues within about 1 s (built and tested nested) |
-| 7 | Suspend and resume with the iPad attached | **Not built** (R2.6). The link should drop and reconnect, but a frozen picture is possible. Run `padlink disconnect` before suspending for now |
+| 7 | Suspend and resume with the iPad attached | After waking, the daemon notices the suspend, removes the old display and builds a new one within a few seconds. **Never tried with a real suspend** |
 | 8 | `kill -9` the daemon, restart it | The leftover display is removed at startup and the session resumes |
 | 9 | Rotate the iPad | The display is rebuilt as 1640x2360 and back, with its windows (seen working in the nested bench) |
+
+You should also get a desktop notification on connect and on disconnect
+(never seen on screen yet; it is silent in the test bench).
 
 Also worth a look: `padlink status` while streaming (latency on the iPad
 should be under 20 ms in ordinary use), and CPU use of `padlinkd` in `top`.
