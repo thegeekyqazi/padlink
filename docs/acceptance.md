@@ -49,12 +49,12 @@ should do at this point.
 | 1 | Plug in, open the app | Display appears right of the laptop screen within about 2 s; a window can be dragged onto it |
 | 2 | Look at text at scale 2 | Sharp; no garbage strip along the bottom edge |
 | 3 | Tap, drag, two-finger scroll, pencil | Tap, drag and pencil move and click the pointer where you touch. **Scroll is unverified** |
-| 4 | Lock the iPad, unlock it | Display goes away, comes back after unlock. **The same workspace returning is not built** (R2.4) |
+| 4 | Lock the iPad, unlock it | Display goes away, comes back after unlock, and workspaces that had windows on it move back |
 | 5 | Unplug | Windows move to the laptop screen; `hyprctl monitors` shows no `padlink-*` |
 | 6 | `hyprctl reload` during a session | Stream continues within about 1 s (built and tested nested) |
 | 7 | Suspend and resume with the iPad attached | **Not built** (R2.6). The link should drop and reconnect, but a frozen picture is possible. Run `padlink disconnect` before suspending for now |
 | 8 | `kill -9` the daemon, restart it | The leftover display is removed at startup and the session resumes |
-| 9 | Rotate the iPad | The display is rebuilt as 1640x2360 and back. No debounce yet, so a quick double rotation rebuilds twice |
+| 9 | Rotate the iPad | The display is rebuilt as 1640x2360 and back, with its windows (seen working in the nested bench) |
 
 Also worth a look: `padlink status` while streaming (latency on the iPad
 should be under 20 ms in ordinary use), and CPU use of `padlinkd` in `top`.
