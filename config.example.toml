@@ -1,0 +1,33 @@
+# padlink config. Copy to ~/.config/padlink/config.toml and edit.
+# Every value below is the default, so an empty file behaves the same.
+# An unknown key or an invalid value stops padlink with a message that
+# names it.
+
+# Video encoder.
+#   "auto"      the GPU if it works, then x264, then OpenH264
+#   "vaapi"     the GPU only: least CPU use
+#   "x264"      the CPU: can be faster than a small GPU, at a much higher CPU cost
+#   "openh264"  the CPU: slowest, always available on Fedora
+encoder = "auto"
+
+# Scale of the iPad's display. 2 gives the same sizes as on the iPad itself.
+# It must divide the iPad's resolution into whole pixels; for a 2360x1640
+# panel that means 1, 1.25, 1.6, 2, 2.5 or 4.
+scale = 2
+
+# Where the display goes: "right", "left", "above" or "below" the other
+# monitors, or exact layout coordinates such as "2877,0".
+position = "right"
+
+# Upper limit on frames per second. The iPad's own limit also applies.
+fps = 60
+
+# Video bitrate in megabits per second.
+bitrate-mbps = 25
+
+# Capture protocol: "auto" picks the one that is safe for your Hyprland
+# version ("wlr" below 0.57, "ext" from 0.57).
+capture = "auto"
+
+# The GPU to encode on. Leave unset to use the first one found.
+# render-node = "/dev/dri/renderD128"

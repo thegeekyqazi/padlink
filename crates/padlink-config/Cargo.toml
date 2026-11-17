@@ -1,0 +1,18 @@
+[package]
+name = "padlink-config"
+description = "padlink's config file: ~/.config/padlink/config.toml, where unknown keys and invalid values are errors."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
