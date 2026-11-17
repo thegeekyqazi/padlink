@@ -26,7 +26,7 @@ use machine::{Command, Ended, Event, Machine, Phase};
 use padlink_config::runtime::State;
 use padlink_config::{Config, Position};
 use padlink_encode::Backend;
-use padlink_hypr::{Hyprland, Placement, instance, output_name};
+use padlink_hypr::{Dialect, Hyprland, Instance, Placement, instance, output_name};
 use padlink_proto::{OPENDISPLAY_PORT, OpenDisplay};
 use padlink_usbmux::{DEFAULT_SOCKET, Device, Transport};
 use session::{Session, SessionConfig, SessionEnd};
@@ -72,39 +72,15 @@ fn run() -> Result<(), String> {
     // R1.21: one daemon per session.
     let _lock = control::acquire_lock(&runtime)?;
 
-    let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok();
-    let instance = instance::find(&runtime, signature.as_deref()).map_err(|e| e.to_string())?;
-    let hypr = Hyprland::new(instance.request_socket());
-    let version = hypr.version().map_err(|e| e.to_string())?;
-    let dialect = hypr.dialect().map_err(|e| e.to_string())?;
-    info!(
-        "Hyprland {version} ({dialect:?} config), instance {}",
-        instance.wl_socket
-    );
-    if hypr.enforces_permissions().unwrap_or(false) {
-        warn!(
-            "Hyprland enforces permissions: without a screencopy permission rule for \
-             padlinkd the iPad will show a black picture"
-        );
-    }
     if config.capture == padlink_config::Capture::Ext {
         warn!("`capture = \"ext\"` is not built yet; using wlr-screencopy");
     }
-
-    // R1.20: outputs left behind by a daemon that was killed. Safe here
-    // because the lock proves no other daemon is using them.
-    for name in hypr.leftover_outputs().map_err(|e| e.to_string())? {
-        info!("removing leftover virtual display {name}");
-        if let Err(e) = hypr.remove_output(&name) {
-            warn!("{e}");
-        }
-    }
+    let mut desktop = Desktop::attach(&runtime)?;
 
     let shared = Shared::new(config.autoconnect);
     control::serve(&runtime, shared.clone())?;
 
     let usbmuxd = Path::new(DEFAULT_SOCKET);
-    let wayland_socket = runtime.join(&instance.wl_socket);
     let mut machine = Machine::new(config.autoconnect);
     let mut dial_at: Option<Instant> = None;
     let mut device: Option<Device> = None;
@@ -114,6 +90,29 @@ fn run() -> Result<(), String> {
     let workspaces = Arc::new(Mutex::new(Vec::new()));
 
     while !stop.load(Ordering::Relaxed) {
+        // R2.8: if Hyprland went away, drop everything known about it and
+        // wait for a new instance.
+        if !instance::is_alive(&desktop.instance) {
+            warn!("Hyprland is no longer running; waiting for it to come back");
+            if std::env::var_os("PADLINK_TESTBENCH").is_some() {
+                // A development daemon must never move from the nested
+                // instance to the user's real session.
+                return Err("the nested Hyprland ended, so this development daemon stops".into());
+            }
+            shared.reset(State::Idle, Some("Hyprland is not running".into()));
+            desktop = loop {
+                if stop.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(500));
+                if let Ok(desktop) = Desktop::attach(&runtime) {
+                    break desktop;
+                }
+            };
+            machine = Machine::new(shared.wanted());
+            (device, dial_at, message) = (None, None, None);
+        }
+
         // What the user wants.
         let command = match (shared.wanted(), machine.phase()) {
             (false, phase) if phase != Phase::Paused => {
@@ -192,16 +191,16 @@ fn run() -> Result<(), String> {
         let session_config = session_config(
             &config,
             d,
-            &wayland_socket,
-            &instance.event_socket(),
+            &desktop.wayland_socket,
+            &desktop.instance.event_socket(),
             &workspaces,
         );
         let session = Session::new(
             OpenDisplay::new(),
             transport,
             &session_config,
-            &hypr,
-            dialect,
+            &desktop.hypr,
+            desktop.dialect,
             shared.clone(),
         )
         .map_err(|e| format!("cannot set up the connection: {e}"))?;
@@ -242,6 +241,61 @@ fn run() -> Result<(), String> {
     }
     info!("padlinkd stopped");
     Ok(())
+}
+
+/// The Hyprland instance the daemon works on.
+struct Desktop {
+    instance: Instance,
+    hypr: Hyprland,
+    dialect: Dialect,
+    wayland_socket: PathBuf,
+}
+
+impl Desktop {
+    /// Find the running Hyprland, learn its version and config dialect, and
+    /// remove displays a killed daemon left behind (R1.20). The caller holds
+    /// the session lock, which proves no other daemon is using them.
+    ///
+    /// The instance named by `HYPRLAND_INSTANCE_SIGNATURE` is used if it is
+    /// running. Otherwise, as under systemd or after Hyprland restarted,
+    /// the oldest running instance is (R2.8).
+    fn attach(runtime: &Path) -> Result<Desktop, String> {
+        let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok();
+        let instance = match instance::find(runtime, signature.as_deref()) {
+            Ok(instance) => instance,
+            // Never fall back in the test bench: the other instance there
+            // is the user's real session.
+            Err(e) if std::env::var_os("PADLINK_TESTBENCH").is_some() => {
+                return Err(e.to_string());
+            }
+            Err(_) => instance::find(runtime, None).map_err(|e| e.to_string())?,
+        };
+        let hypr = Hyprland::new(instance.request_socket());
+        let version = hypr.version().map_err(|e| e.to_string())?;
+        let dialect = hypr.dialect().map_err(|e| e.to_string())?;
+        info!(
+            "Hyprland {version} ({dialect:?} config), instance {}",
+            instance.wl_socket
+        );
+        if hypr.enforces_permissions().unwrap_or(false) {
+            warn!(
+                "Hyprland enforces permissions: without a screencopy permission rule for \
+                 padlinkd the iPad will show a black picture"
+            );
+        }
+        for name in hypr.leftover_outputs().map_err(|e| e.to_string())? {
+            info!("removing leftover virtual display {name}");
+            if let Err(e) = hypr.remove_output(&name) {
+                warn!("{e}");
+            }
+        }
+        Ok(Desktop {
+            wayland_socket: runtime.join(&instance.wl_socket),
+            instance,
+            hypr,
+            dialect,
+        })
+    }
 }
 
 /// Turn a machine command into the time of the next dial.
