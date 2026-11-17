@@ -1,0 +1,19 @@
+[package]
+name = "padlink-usbmux"
+description = "usbmuxd client: list iOS devices, watch attach and detach, and open a TCP tunnel to a device port."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+plist = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+plist = { workspace = true }
+
+[lints]
+workspace = true
