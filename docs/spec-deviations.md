@@ -40,6 +40,8 @@ machine (rule 7). They are not choices.
 
 | T2 | End to end p50 20 ms, p95 35 ms | Met in ordinary use (14 to 17 ms p50, 16 to 18 ms p95). Missed under full-screen change: 30 to 39 ms p50 at 39 to 50 fps, where the official sender reaches 18 ms | Each frame takes longer to process than the gap between frames; details in `docs/spikes.md` | Zero-copy capture, multi-threaded colour conversion, VBR. **Decided by the user on 16 Nov 2026:** the GPU stays the default because this laptop's CPU is weak; x264 and OpenH264 remain selectable with `encoder` in the config file |
 
+| T3 | Not a spec target: bitrate should follow content | `h264_vaapi` emits about 25 Mbit/s even when only a thin strip changes, in CBR (25.1) and in VBR (24.4) alike | The Radeon driver's rate control fills the target in both modes | Untried: constant-QP with a frame-size ceiling (`rc_mode=CQP`, `max_frame_size`). VBR was tried and reverted; the encoder stays on CBR |
+
 ## Not built yet (Phase 1)
 
 Requirements still open as of 16 Nov 2026, so nobody reads the code and
