@@ -6,11 +6,11 @@ summary:
 | Spike | Status | Short result |
 | --- | --- | --- |
 | Host setup | Done | Driver was already installed; H.264 and HEVC encode entrypoints present |
-| 1. Receiver works at all | **Not run** | Blocked: the session was not permitted to execute the downloaded `od-sender` binary |
-| 2. USB tunnel | **Partly done** | Tunnel and `hello` proven with a probe script; streaming over it not run (needs `od-sender`) |
+| 1. Receiver works at all | Pass | The App Store receiver decodes and displays the stream on iPadOS 26.3.1: 10 ms p50 end to end on a nearly static screen |
+| 2. USB tunnel | Pass | Streaming through usbmuxd works under load: 18 ms p50, 21 ms p95, 52 fps at 17.5 Mbit/s, no stalls |
 | 3. Hardware encode at iPad size | Pass | Stream signals exactly 2360x1640; no SPS rewriting needed |
 | 4. Zero-copy capture | Pass on feasibility; **latency not measured** | dmabuf to VA-API to H.264 works on radeonsi; per-frame timing still to be measured |
-| 5. Stylus type | **Not run** | Needs the user, the iPad and `od-sender` at debug level |
+| 5. Stylus type | **Open** | Only `touch` messages were logged, but it is not confirmed that the pencil was used |
 
 ## Differences from SPEC.md section 2
 
@@ -35,17 +35,32 @@ Found by re-checking the machine instead of trusting the table:
 
 ## Spike 1: the receiver works at all
 
-Not run. `od-sender` v1.30.3 (x86_64 tarball, checksum verified) is unpacked
-in `reference/dl/`, but executing it was denied by the session's permission
-rules, so nothing was streamed and there is no baseline latency figure.
+Pass. Run with the official `od-sender` v1.30.3 through
+`testbench/od-sender.sh`, which targets the nested Hyprland only.
+`od-sender doctor` reported Hyprland 0.56.2 as tested, `enforce_permissions`
+off, capture by `wlr-screencopy`, and encoders x264 and OpenH264 (it has no
+VA-API support).
 
-Also note a conflict in the spec: `od-sender run` creates and removes a
-headless output, and rule 2 forbids that on the live session. It should be
-run inside the nested test bench (`testbench/nested.sh`), which is safe.
+`od-sender list` found the iPad at `172.20.10.1:9000`. That is **not Wi-Fi**:
+the laptop's only network at the time was the iPad's own USB tethering
+interface (`ipheth`, 172.20.10.3/28), so this run also travelled over the
+cable, as IP packets instead of through usbmuxd. A true Wi-Fi baseline was
+not taken.
 
-What is known without it: the receiver app is open, listening, and speaks
-protocol version 3 (see Spike 2). Whether it decodes and displays a stream on
-iPadOS 26.3.1 is still unproven.
+`od-sender --debug run --to 172.20.10.1:9000`, with the user touching the
+iPad and little on screen (0.2 Mbit/s):
+
+| Figure | Value |
+| --- | --- |
+| Receiver end to end (`e2e50` / `e2e95`) | 10 ms / 12 ms |
+| Receiver frame rate while content moved | 50 to 56 fps |
+| Sender x264 encode p50 / p95 | 7.3 ms / 8.8 ms |
+| Sender capture to send p50 / p95 | 8.2 ms / 10.3 ms |
+| Round trip time | 1 to 2 ms |
+
+The receiver sent `hello`, `stats` and `touch` messages; one `kf` request was
+served. The virtual display came up as 2360x1640 at scale 2 and was removed
+cleanly on `od-sender disconnect`.
 
 ## Spike 2: USB tunnel
 
@@ -79,8 +94,29 @@ Re-check after the iPad was moved to a laptop USB-A port (same day): still
 one USB device at 480 Mbit/s on bus 3, `Connect` OK, same `hello`, this time
 6 ms after dialing.
 
-Not done: streaming through the tunnel and comparing latency with Wi-Fi, and
-throughput under load on the USB 2.0 port. Both need a sender.
+**Streaming through the tunnel.** `iproxy 9000 9000`, then
+`od-sender --debug run --to 127.0.0.1:9000`, with a terminal printing
+continuously on the streamed display so the link carried real bitrate. The
+receiver classified the transport as `USB`.
+
+| Figure | Value |
+| --- | --- |
+| Receiver end to end (`e2e50` / `e2e95`) | 18 ms / 21 ms |
+| Frame rate | 52 fps (sender and receiver agree) |
+| Bitrate | 17.5 Mbit/s of a 20 Mbit/s target |
+| Stalls reported by the receiver | 0 once content was flowing |
+| Sender x264 encode p50 / p95 | 15.0 ms / 17.4 ms |
+| Sender capture to send p50 / p95 | 15.2 ms / 17.6 ms |
+| Round trip time | 1 to 4 ms |
+
+Reading: of the 18 ms, about 15 ms is the CPU encoder; the tunnel, decode and
+display add about 3 ms. The encoder is also what holds the rate at 52 fps
+(15 ms is close to the 16.7 ms frame budget). The usbmuxd tunnel on USB 2.0 is
+not the bottleneck at this bitrate. Hardware encode at roughly 7 ms per frame
+(Spike 3) should bring the end-to-end figure down by a similar amount.
+
+The two runs are not a like-for-like transport comparison: the first had an
+almost static screen, the second a full-screen moving one.
 
 ## Spike 3: hardware encode at the iPad's size
 
@@ -140,8 +176,10 @@ made no difference to throughput.
 
 ## Spike 5: stylus type
 
-Not run. Needs the user to draw with the pencil while a sender logs incoming
-control messages at debug level.
+Open. During the first run the sender logged 198 `touch` messages (Began,
+Moved) and no `pencil` messages. It is not known whether those came from a
+finger or the pencil, so this needs the user's confirmation. If the pencil was
+used, it reports as plain touch and R3.4 is dropped.
 
 ## Pinned upstream
 
