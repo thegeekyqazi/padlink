@@ -14,10 +14,15 @@ padlink-hypr = { workspace = true }
 padlink-input = { workspace = true }
 padlink-proto = { workspace = true }
 padlink-usbmux = { workspace = true }
+rustix = { workspace = true }
+serde_json = { workspace = true }
 signal-hook = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
