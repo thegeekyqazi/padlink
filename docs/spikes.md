@@ -10,7 +10,7 @@ summary:
 | 2. USB tunnel | Pass | Streaming through usbmuxd works under load: 18 ms p50, 21 ms p95, 52 fps at 17.5 Mbit/s, no stalls |
 | 3. Hardware encode at iPad size | Pass | Stream signals exactly 2360x1640; no SPS rewriting needed |
 | 4. Zero-copy capture | Pass on feasibility; **latency not measured** | dmabuf to VA-API to H.264 works on radeonsi; per-frame timing still to be measured |
-| 5. Stylus type | **Open** | Only `touch` messages were logged, but it is not confirmed that the pencil was used |
+| 5. Stylus type | Done | The pencil sends `pencil` and `proximity` messages, with tilt. Pressure was 1.0 in every sample seen |
 
 ## Differences from SPEC.md section 2
 
@@ -176,10 +176,51 @@ made no difference to throughput.
 
 ## Spike 5: stylus type
 
-Open. During the first run the sender logged 198 `touch` messages (Began,
-Moved) and no `pencil` messages. It is not known whether those came from a
-finger or the pencil, so this needs the user's confirmation. If the pencil was
-used, it reports as plain touch and R3.4 is dropped.
+Done: the third-party pencil arrives as `pencil` messages, not `touch`.
+
+The official sender's debug log could not answer this. It logs `touch` and
+`scroll` but handles `pencil` without a log line, and on Hyprland its input
+backend drops `pencil` entirely (the default no-op in `backend/mod.rs`). That
+is why the user saw finger input move the pointer and the pencil do nothing.
+
+So `spikes/tap_proxy.py` was put between `od-sender` and the usbmuxd tunnel.
+It forwards bytes unchanged and counts the message types the iPad sends. In
+about 80 seconds, with the user drawing with the pencil and then a finger:
+
+| Message | Count |
+| --- | --- |
+| `pencil` | 3055 |
+| `proximity` | 28 |
+| `touch` | 994 |
+| `ping` | 28 |
+| `stats` | 3 |
+| `hello` | 1 |
+
+A sample:
+
+```json
+{"type":"pencil","phase":"down","x":0.5729,"y":0.5232,"pressure":1,
+ "azimuth":1.9619,"altitude":1.2731,"rotation":0,"t":1794881707492.2495}
+```
+
+- `phase` values seen: `down`, `move`. `proximity` reports the pen entering
+  and leaving hover range.
+- `azimuth` and `altitude` carry real values, so tilt is reported.
+- `pressure` was exactly 1 in all five samples printed. Only five were
+  printed, so whether pressure ever varies is **not established**; the
+  expectation for a third-party pencil is that it does not.
+- No `scroll` message was seen in this run; two-finger scroll was not
+  confirmed either way.
+
+Consequences:
+
+- R3.4 (uinput tablet) stays in scope, since `pencil` messages do arrive. Its
+  value is tilt and hover; pressure needs a longer capture before promising
+  anything.
+- R1.16 assumes stylus input arrives as `touch`. It does not: this receiver
+  sends `pencil` to a protocol 3 sender. Unless Phase 1 also maps `pencil`
+  down, move and up to the pointer, the pencil does nothing until Phase 3.
+  See `docs/spec-deviations.md`, D9.
 
 ## Pinned upstream
 
