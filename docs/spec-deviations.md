@@ -32,6 +32,12 @@ machine (rule 7). They are not choices.
 | F5 | 1640 not being a multiple of 16 may need SPS rewriting or a 2360x1632 mode | The encoder pads to 1648 and signals the crop correctly | Neither workaround is needed. R1.15's unit test stays |
 | F6 | Stylus "probably reports no pressure or tilt. Treat as touch"; receiver capabilities unknown | The stylus sends `pencil` messages with tilt (pressure looked fixed at 1). The `hello` advertises protocol 3, `panel`, H.264 and HEVC at 60 fps, and a cursor port | R1.5, R1.6, R3.1 and R3.4 all apply; see D9 for the stylus |
 
+## Targets at risk
+
+| # | Spec target (section 9) | Measured | Why | Options |
+| --- | --- | --- | --- | --- |
+| T1 | Capture to encoded packet, p50 8 ms or less, at 2360x1640 | 14.6 ms with pixels uploaded from the CPU (3.6 ms upload + 11.1 ms GPU convert and encode). About 11 ms expected with zero-copy | The Radeon encoder's throughput: about 2.9 ms per megapixel, linear across sizes, unaffected by rate control or presets. Details in `docs/spikes.md` | (a) Accept about 11 ms; the 20 ms end-to-end target still looks reachable. (b) Use x264 with a multi-threaded colour conversion: lower latency, much more CPU. (c) Stream fewer pixels, for example 1640x1148 (6.9 ms), giving up sharpness. The build continues with (a), GPU first as the spec orders; the choice stays open until end-to-end numbers exist |
+
 ## Requirements changed
 
 - **R1.16 widened (D9, agreed 16 Nov 2026):** `pencil` down, move and up drive

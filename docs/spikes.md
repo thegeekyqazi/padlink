@@ -9,7 +9,7 @@ summary:
 | 1. Receiver works at all | Pass | The App Store receiver decodes and displays the stream on iPadOS 26.3.1: 10 ms p50 end to end on a nearly static screen |
 | 2. USB tunnel | Pass | Streaming through usbmuxd works under load: 18 ms p50, 21 ms p95, 52 fps at 17.5 Mbit/s, no stalls |
 | 3. Hardware encode at iPad size | Pass | Stream signals exactly 2360x1640; no SPS rewriting needed |
-| 4. Zero-copy capture | Pass on feasibility; **latency not measured** | dmabuf to VA-API to H.264 works on radeonsi; per-frame timing still to be measured |
+| 4. Zero-copy capture | Pass on feasibility; **latency target missed** | dmabuf to VA-API to H.264 works on radeonsi. Measured later: GPU convert plus encode takes about 11 ms at 2360x1640, above the 8 ms target |
 | 5. Stylus type | Done | The pencil sends `pencil` and `proximity` messages, with tilt. Pressure was 1.0 in every sample seen |
 
 ## Differences from SPEC.md section 2
@@ -173,6 +173,40 @@ So convert plus encode costs roughly 7 ms per frame at this size. The 8 ms
 target looks reachable but tight; treat it as an open risk until the daemon's
 built-in per-stage timing (section 9) gives real numbers. `-async_depth 1`
 made no difference to throughput.
+
+### Follow-up: measured encode latency (Phase 1, `padlink-encode`)
+
+The missing figure was measured once the encoder crate existed, with
+`cargo run --release -p padlink-encode --example bench`: one frame in, one
+packet out, timed synchronously, a 200-row band changing each frame. This is
+the shared-memory path (pixels uploaded from the CPU), not zero-copy.
+
+| Size | Backend | Total p50 / p95 | Prepare | Codec |
+| --- | --- | --- | --- | --- |
+| 2360x1640 | `h264_vaapi` | 14.6 / 15.6 ms | 3.6 ms upload | 11.1 ms convert + encode |
+| 2360x1640 | x264 `ultrafast` | 12.2 / 13.0 ms | 8.8 ms colour conversion | 3.4 ms |
+| 2360x1640 | OpenH264 | 21.5 / 22.4 ms | 8.7 ms | 12.8 ms |
+| 1640x1148 | `h264_vaapi` | 6.9 / 7.7 ms | 1.0 ms | 5.9 ms |
+| 1180x820 | `h264_vaapi` | 3.7 / 4.0 ms | 0.4 ms | 3.3 ms |
+
+Findings:
+
+- **The 8 ms capture-to-packet target is not reachable at 2360x1640 on this
+  GPU.** GPU convert plus encode costs about 2.9 ms per megapixel, in a
+  straight line across three sizes: that is the Radeon encoder's throughput,
+  not a setting. The "about 7 ms" estimate above came from pipelined
+  throughput with two frames in flight and understated latency.
+- Rate-control mode (CBR, VBR, CQP), profile, `compression_level` 0 to 2 and
+  `quality` 0 to 3 all land within a millisecond of each other; `quality`
+  4 to 6 doubles the time. `low_power` is not offered by the driver.
+- Zero-copy capture would remove the 3.6 ms upload, leaving about 11 ms.
+- x264's codec time is only 3.4 ms on mostly-static content; its cost is the
+  single-threaded BGRx to YUV conversion (8.8 ms). With a multi-threaded
+  conversion it could be the lower-latency path, at the price of CPU load
+  (the target of under 15% of one core would not hold).
+- The end-to-end target (20 ms p50) still looks reachable: the official
+  sender reached 18 ms with a 15 ms CPU encode, so about 11 ms of GPU time
+  should land near 14 to 15 ms. Unmeasured until the daemon streams.
 
 ## Spike 5: stylus type
 
