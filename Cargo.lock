@@ -382,6 +382,7 @@ name = "padlinkd"
 version = "0.1.0"
 dependencies = [
  "padlink-capture",
+ "padlink-config",
  "padlink-encode",
  "padlink-hypr",
  "padlink-input",

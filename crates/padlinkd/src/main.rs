@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use padlink_config::{Config, Position};
 use padlink_encode::Backend;
 use padlink_hypr::{Hyprland, Placement, instance, output_name};
 use padlink_proto::{OPENDISPLAY_PORT, OpenDisplay};
@@ -41,6 +42,9 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
+    // Before anything else: a broken config must stop the daemon with a
+    // message, not half-way through setting up a display.
+    let config = load_config()?;
     let stop = Arc::new(AtomicBool::new(false));
     // R1.19: the same teardown on every way of being asked to stop.
     for signal in [
@@ -89,14 +93,28 @@ fn run() -> Result<(), String> {
         device.speed_bps.unwrap_or(0) / 1_000_000
     );
 
+    if config.capture == padlink_config::Capture::Ext {
+        warn!("`capture = \"ext\"` is not built yet; using wlr-screencopy");
+    }
     let config = SessionConfig {
         output_name: output_name(&device.short_id()),
-        scale: 2.0,
-        placement: Placement::Right,
-        fps: 60,
-        bitrate_bps: 25_000_000,
-        encoder: encoder_override(),
-        render_node: "/dev/dri/renderD128".into(),
+        scale: config.scale,
+        placement: match config.position {
+            Position::Right => Placement::Right,
+            Position::Left => Placement::Left,
+            Position::Above => Placement::Above,
+            Position::Below => Placement::Below,
+            Position::At(x, y) => Placement::At(x, y),
+        },
+        fps: config.fps,
+        bitrate_bps: config.bitrate_bps(),
+        encoder: match config.encoder {
+            padlink_config::Encoder::Auto => Backend::Auto,
+            padlink_config::Encoder::Vaapi => Backend::Vaapi,
+            padlink_config::Encoder::X264 => Backend::X264,
+            padlink_config::Encoder::Openh264 => Backend::OpenH264,
+        },
+        render_node: render_node(&config),
         cursor: true,
         wayland_socket: runtime.join(&instance.wl_socket),
     };
@@ -125,15 +143,44 @@ fn run() -> Result<(), String> {
     }
 }
 
-/// `PADLINK_ENCODER=vaapi|x264|openh264` picks the encoder until the config
-/// file exists. Anything else, or nothing, means automatic.
-fn encoder_override() -> Backend {
-    match std::env::var("PADLINK_ENCODER").as_deref() {
-        Ok("vaapi") => Backend::Vaapi,
-        Ok("x264") => Backend::X264,
-        Ok("openh264") => Backend::OpenH264,
-        _ => Backend::Auto,
+/// The config file named by `--config <path>`, or the default location.
+fn load_config() -> Result<Config, String> {
+    let mut args = std::env::args().skip(1);
+    let path = match (args.next().as_deref(), args.next()) {
+        (None, _) => padlink_config::default_path()
+            .ok_or("cannot find the config directory: neither XDG_CONFIG_HOME nor HOME is set")?,
+        (Some("--config"), Some(path)) => PathBuf::from(path),
+        _ => return Err("usage: padlinkd [--config <path>]".into()),
+    };
+    let config = Config::load(&path).map_err(|e| e.to_string())?;
+    if path.exists() {
+        info!("config: {}", path.display());
+    } else {
+        info!("config: defaults ({} does not exist)", path.display());
     }
+    Ok(config)
+}
+
+/// The GPU to encode on: the configured one, or the first render node.
+fn render_node(config: &Config) -> PathBuf {
+    if let Some(node) = &config.render_node {
+        return node.clone();
+    }
+    let mut nodes: Vec<PathBuf> = std::fs::read_dir("/dev/dri")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("renderD"))
+        })
+        .collect();
+    nodes.sort();
+    nodes
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "/dev/dri/renderD128".into())
 }
 
 /// The first iPad on a cable, waiting for one to be plugged in.

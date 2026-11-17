@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 padlink-capture = { workspace = true }
+padlink-config = { workspace = true }
 padlink-encode = { workspace = true }
 padlink-hypr = { workspace = true }
 padlink-input = { workspace = true }
