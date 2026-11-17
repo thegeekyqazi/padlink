@@ -4,14 +4,23 @@ For whoever continues this project, human or agent. It assumes you have not
 seen the earlier conversation. Keep it current: update the "State" and "What
 is left" sections whenever you finish something.
 
-Last updated: 16 Nov 2026, after compositor-restart handling (R2.8).
-163 tests pass, plus 9 in the nested bench. 72 commits on `main`.
+Last updated: 16 Nov 2026, after zero-copy capture (R1.12) was built.
+168 tests pass, plus 10 in the nested bench.
 
 **Where things stand in one paragraph:** every Phase 1 command works in the
-nested bench against the real iPad. Nothing has run on the user's live
-session; `docs/acceptance.md` is the procedure for that and the user must
-do it. The main Phase 1 gap is zero-copy capture, which is waiting for the
-user to install `mesa-libgbm-devel`.
+nested bench against the real iPad. The user started `padlinkd` on the
+**live session** on 16 Nov 2026 (an older build, shared-memory capture): the
+display appeared at 2877x0, scale 2, and streamed. Nobody has gone through
+`docs/acceptance.md` step by step yet. Zero-copy capture is built and passes
+its tests (encoder with GBM buffers; capture in the nested bench), but **has
+not streamed to the iPad end to end**, because the user's live daemon held
+the iPad at the time. Measuring it is the next job.
+
+**Never run `testbench/padlinkd.sh` while the user's own `padlinkd` is
+running.** They share the session lock, so the bench daemon refuses to
+start; and if that were bypassed it would take the iPad away from the live
+session, because the receiver serves whichever sender spoke last. Check with
+`pgrep -a padlinkd` first and ask the user to run `padlink disconnect`.
 
 ## 1. What this is
 
@@ -201,26 +210,17 @@ In the order I would do it. Each item names the files and the approach.
    systemd the log lines still carry their own timestamps.
 2. **The user's live run** (`docs/acceptance.md`). Expect findings; fix
    those before anything else.
-3. **Zero-copy capture** (R1.12): the biggest remaining latency item for
-   the GPU path. It removes the compositor's readback and the 3.6 to 5.8 ms
-   upload.
-   - Capture: `wlr-screencopy` v3 sends a `linux_dmabuf` event with the
-     format and size. Allocate a dmabuf (GBM via the `gbm` crate on the
-     render node), wrap it with `zwp_linux_dmabuf_v1` `create_immed`, and
-     pass that `wl_buffer` to `copy_with_damage`. Add a `Path::WlrDmabuf`
-     and a second `Frame` kind carrying the fd, fourcc, modifier, offset and
-     stride instead of a `Lease`.
-   - Encode: add `Encoder::encode_dmabuf`. Build a second filter graph in
-     `padlink-encode/src/lib.rs`: a `buffer` source whose frames are
-     `AV_PIX_FMT_DRM_PRIME` with an `AVDRMFrameDescriptor`, then
-     `hwmap=mode=direct:derive_device=vaapi`, then `scale_vaapi=format=nv12`.
-     This is what `wf-recorder` does, and Spike 4 proved it works on this
-     GPU. Read `wf-recorder`'s `frame-writer.cpp` and Sunshine's
-     `src/platform/linux/vaapi.cpp`.
-   - Keep shared memory as the automatic fallback and log which path is
-     active. Software encoders cannot take dmabufs: use shared memory then.
-   - Measure again with `testbench/padlinkd.sh` and add the numbers to
-     `docs/spikes.md`.
+3. **Measure zero-copy capture** (R1.12). It is built: capture allocates
+   GBM buffers and registers them through linux-dmabuf
+   (`padlink-capture/src/wlr.rs`, `GpuAllocator`), the encoder imports them
+   with `hwmap` (`padlink-encode/src/dmabuf.rs`), and the daemon uses it
+   whenever the GPU encoder is active and `zero-copy = true` (the default).
+   It falls back to shared memory by itself. What is missing is the
+   end-to-end run: `testbench/padlinkd.sh`, check `padlink status` says
+   "zero-copy GPU buffers", then light load (`testbench/wiggle.sh 12`) and
+   heavy load, and add the numbers to `docs/spikes.md` beside the
+   shared-memory ones (16 to 17 ms and 39 ms end to end). In the encoder
+   test, preparing a frame took 0.2 ms instead of 3.6.
 4. **`ext-image-copy-capture`** for Hyprland 0.57 and later (SPEC.md section
    8). Select by `padlink_hypr::EXT_CAPTURE_SAFE_FROM`; `capture = "ext"` in
    the config must override. Today it warns and uses wlr.
