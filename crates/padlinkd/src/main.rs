@@ -107,12 +107,14 @@ fn run() -> Result<(), String> {
     let mut device: Option<Device> = None;
     let mut message: Option<String> = None;
     let mut usbmuxd_down = false;
+    let mut paused_because: Option<String> = None;
 
     while !stop.load(Ordering::Relaxed) {
         // What the user wants.
         let command = match (shared.wanted(), machine.phase()) {
             (false, phase) if phase != Phase::Paused => {
-                message = None;
+                // Keep the reason when padlink paused itself.
+                message = paused_because.take();
                 machine.on(Event::UserDisconnect)
             }
             (true, Phase::Paused) => machine.on(Event::UserConnect),
@@ -183,7 +185,7 @@ fn run() -> Result<(), String> {
         machine.on(Event::DialSucceeded);
         info!("connected to the receiver over USB");
 
-        let session_config = session_config(&config, d, &wayland_socket);
+        let session_config = session_config(&config, d, &wayland_socket, &instance.event_socket());
         let session = Session::new(
             OpenDisplay::new(),
             transport,
@@ -210,6 +212,13 @@ fn run() -> Result<(), String> {
                 error!("{why}");
                 (Ended::Failed, why)
             }
+            SessionEnd::GaveUp(why) => {
+                error!("{why}");
+                // Stay disconnected; the top of the loop pauses the machine.
+                shared.set_wanted(false);
+                paused_because = Some(why);
+                continue;
+            }
         };
         info!("disconnected: {why}");
         message = Some(why);
@@ -226,7 +235,12 @@ fn schedule(command: Command, dial_at: &mut Option<Instant>) {
     }
 }
 
-fn session_config(config: &Config, device: &Device, wayland_socket: &Path) -> SessionConfig {
+fn session_config(
+    config: &Config,
+    device: &Device,
+    wayland_socket: &Path,
+    hypr_events: &Path,
+) -> SessionConfig {
     SessionConfig {
         output_name: output_name(&device.short_id()),
         scale: config.scale,
@@ -248,6 +262,7 @@ fn session_config(config: &Config, device: &Device, wayland_socket: &Path) -> Se
         render_node: render_node(config),
         cursor: true,
         wayland_socket: wayland_socket.to_path_buf(),
+        hypr_events: hypr_events.to_path_buf(),
     }
 }
 

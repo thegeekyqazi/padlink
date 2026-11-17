@@ -15,7 +15,7 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -50,6 +50,8 @@ pub struct SessionConfig {
     pub cursor: bool,
     /// The compositor's Wayland socket.
     pub wayland_socket: PathBuf,
+    /// Hyprland's event socket (`.socket2.sock`).
+    pub hypr_events: PathBuf,
 }
 
 /// Why a session ended.
@@ -65,6 +67,9 @@ pub enum SessionEnd {
     Disconnected(String),
     /// Something padlink could not do. The text says what and what to try.
     Failed(String),
+    /// Trying again would only repeat the problem. The daemon stays
+    /// disconnected until the user runs `padlink connect`.
+    GaveUp(String),
 }
 
 enum Event {
@@ -74,6 +79,8 @@ enum Event {
     Packet(Encoded),
     /// The capture or encode thread stopped on its own.
     PipelineFailed(String),
+    /// Hyprland reloaded its config, which resets the output's settings.
+    ConfigReloaded,
 }
 
 struct Encoded {
@@ -90,6 +97,8 @@ struct Encoded {
 /// The output and the threads working on it. Built on `hello`, rebuilt on
 /// rotation, torn down in a fixed order (R1.18).
 struct Pipeline {
+    /// What was asked of Hyprland, to put back after a config reload (R2.5).
+    spec: OutputSpec,
     output: String,
     stop_capture: Arc<AtomicBool>,
     slot: Arc<Slot<Frame>>,
@@ -166,6 +175,13 @@ pub struct Session<'a, R: Receiver> {
     shared: Arc<Shared>,
     /// Frames and bytes since the status was last published.
     published: (Instant, u64, u64),
+    /// When to put the output's settings back after a config reload.
+    reapply_at: Option<Instant>,
+    last_drift_check: Instant,
+    /// When the output's settings were lost, to give up if it keeps happening.
+    losses: Vec<Instant>,
+    /// Cleared when the session ends, so helper threads stop.
+    alive: Arc<AtomicBool>,
 }
 
 impl<'a, R: Receiver> Session<'a, R> {
@@ -187,6 +203,8 @@ impl<'a, R: Receiver> Session<'a, R> {
         // where frames are replaced, instead of into a queue of packets.
         let (events_tx, events) = mpsc::sync_channel(1);
         spawn_reader(transport, events_tx.clone());
+        let alive = Arc::new(AtomicBool::new(true));
+        spawn_reload_watch(&config.hypr_events, events_tx.clone(), alive.clone());
         Ok(Session {
             receiver,
             config,
@@ -201,6 +219,10 @@ impl<'a, R: Receiver> Session<'a, R> {
             last_report: Instant::now(),
             shared,
             published: (Instant::now(), 0, 0),
+            reapply_at: None,
+            last_drift_check: Instant::now(),
+            losses: Vec::new(),
+            alive,
         })
     }
 
@@ -231,6 +253,12 @@ impl<'a, R: Receiver> Session<'a, R> {
                 Ok(Event::Packet(packet)) => self.send_packet(packet),
                 Ok(Event::Closed(why)) => Some(SessionEnd::Disconnected(why)),
                 Ok(Event::PipelineFailed(why)) => Some(SessionEnd::Failed(why)),
+                Ok(Event::ConfigReloaded) => {
+                    // R2.5: give Hyprland 200 ms to finish applying its own
+                    // rules, then put ours back.
+                    self.reapply_at = Some(Instant::now() + Duration::from_millis(200));
+                    None
+                }
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => {
                     Some(SessionEnd::Disconnected("the reader stopped".into()))
@@ -238,6 +266,18 @@ impl<'a, R: Receiver> Session<'a, R> {
             };
             if let Some(end) = outcome {
                 break end;
+            }
+            // Also compare the live settings every two seconds, in case
+            // something changed them without a reload event.
+            let drifted = self.last_drift_check.elapsed() >= Duration::from_secs(2) && {
+                self.last_drift_check = Instant::now();
+                self.output_drifted()
+            };
+            if drifted || self.reapply_at.is_some_and(|at| Instant::now() >= at) {
+                self.reapply_at = None;
+                if let Some(end) = self.reapply() {
+                    break end;
+                }
             }
             if last_tick.elapsed() >= Duration::from_millis(250) {
                 last_tick = Instant::now();
@@ -250,6 +290,7 @@ impl<'a, R: Receiver> Session<'a, R> {
             }
         };
         info!("session ended: {end:?}");
+        self.alive.store(false, Ordering::Relaxed);
         self.receiver.disconnected();
         if let Some(pipeline) = self.pipeline.take() {
             pipeline.teardown(self.hypr);
@@ -333,6 +374,57 @@ impl<'a, R: Receiver> Session<'a, R> {
             }
         }
         end
+    }
+
+    /// Whether the output no longer has the mode, scale and position asked for.
+    fn output_drifted(&self) -> bool {
+        let Some(pipeline) = &self.pipeline else {
+            return false;
+        };
+        match self.hypr.monitor(&pipeline.output) {
+            Ok(Some(m)) => {
+                let s = &pipeline.spec;
+                (m.width, m.height, m.x, m.y) != (s.width, s.height, s.x, s.y)
+                    || (m.scale - s.scale).abs() > 1e-3
+            }
+            // Gone or unreadable: the capture thread reports a removed
+            // output, and a dead compositor ends the session elsewhere.
+            _ => false,
+        }
+    }
+
+    /// R2.5: put the output's mode, scale and position back. Three losses
+    /// within a minute mean something keeps overriding them: give up and say
+    /// what to look for.
+    fn reapply(&mut self) -> Option<SessionEnd> {
+        let pipeline = self.pipeline.as_ref()?;
+        if !self.output_drifted() {
+            return None;
+        }
+        let now = Instant::now();
+        self.losses
+            .retain(|at| now.duration_since(*at) < Duration::from_secs(60));
+        self.losses.push(now);
+        if self.losses.len() >= 3 {
+            return Some(SessionEnd::GaveUp(format!(
+                "Hyprland changed the settings of {} three times within a minute. \
+                 A monitor rule in your Hyprland config probably applies to it (one \
+                 with an empty or wildcard output name); make that rule skip `padlink-*`, then run `padlink connect`",
+                pipeline.output
+            )));
+        }
+        warn!(
+            "Hyprland reset the settings of {}; putting them back",
+            pipeline.output
+        );
+        match self.hypr.apply(self.dialect, &pipeline.spec) {
+            Ok(_) => {
+                // The receiver saw frames stop; start again from a keyframe.
+                pipeline.slot.request_keyframe();
+                None
+            }
+            Err(e) => Some(SessionEnd::Failed(e.to_string())),
+        }
     }
 
     /// Refresh the figures `padlink status` shows, once a second (R1.22).
@@ -493,7 +585,12 @@ impl<'a, R: Receiver> Session<'a, R> {
 
         let slot = Arc::new(Slot::default());
         let stop_capture = Arc::new(AtomicBool::new(false));
-        let encode = spawn_encoder(encoder, slot.clone(), self.events_tx.clone());
+        let encode = spawn_encoder(
+            encoder,
+            (plan.width, plan.height),
+            slot.clone(),
+            self.events_tx.clone(),
+        );
         let capture = spawn_capture(
             CaptureOptions {
                 wayland_socket: config.wayland_socket.clone(),
@@ -517,7 +614,8 @@ impl<'a, R: Receiver> Session<'a, R> {
         }
 
         let pipeline = Pipeline {
-            output: spec.name,
+            output: spec.name.clone(),
+            spec,
             stop_capture,
             slot,
             capture: Some(capture),
@@ -606,8 +704,46 @@ fn spawn_capture(
         .expect("spawn capture thread")
 }
 
+/// Watch Hyprland's event socket for config reloads (R2.5).
+fn spawn_reload_watch(socket: &Path, events: mpsc::SyncSender<Event>, alive: Arc<AtomicBool>) {
+    let Ok(stream) = UnixStream::connect(socket) else {
+        warn!(
+            "cannot watch Hyprland's events at {}; a config reload will be noticed within two seconds instead",
+            socket.display()
+        );
+        return;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = std::thread::Builder::new()
+        .name("padlink-hypr-events".into())
+        .spawn(move || {
+            let mut reader = std::io::BufReader::new(stream);
+            let mut line = String::new();
+            while alive.load(Ordering::Relaxed) {
+                match std::io::BufRead::read_line(&mut reader, &mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if line.starts_with("configreloaded>>") {
+                            let _ = events.try_send(Event::ConfigReloaded);
+                        }
+                        line.clear();
+                    }
+                    // The read timed out, possibly mid-line: keep what was
+                    // read and go round to check `alive`.
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+}
+
 fn spawn_encoder(
     mut encoder: Encoder,
+    size: (u32, u32),
     slot: Arc<Slot<Frame>>,
     events: mpsc::SyncSender<Event>,
 ) -> JoinHandle<()> {
@@ -618,6 +754,18 @@ fn spawn_encoder(
                 let (result, captured) = match slot.take() {
                     Work::Closed => break,
                     Work::Frame { item, keyframe } => {
+                        if (item.width, item.height) != size {
+                            // The output briefly has another mode, as after
+                            // a config reload. The session puts it back.
+                            debug!(
+                                "skipping a {}x{} frame while the output is not {}x{}",
+                                item.width, item.height, size.0, size.1
+                            );
+                            if keyframe {
+                                slot.defer_keyframe();
+                            }
+                            continue;
+                        }
                         let result =
                             encoder.encode_bgrx(&item.pixels, item.stride as usize, keyframe);
                         // The lease on the capture buffer ends here.
