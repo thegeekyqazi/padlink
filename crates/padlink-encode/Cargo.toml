@@ -1,0 +1,13 @@
+[package]
+name = "padlink-encode"
+description = "Video encoding for padlink through FFmpeg: h264_vaapi first, then x264 or OpenH264, selected at run time."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ffmpeg-sys-next = { workspace = true }
+opendisplay-proto = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
