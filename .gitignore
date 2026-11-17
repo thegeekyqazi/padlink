@@ -2,3 +2,4 @@ target/
 /reference/
 *.h264
 *.log
+.claude/settings.local.json
