@@ -1,0 +1,22 @@
+[package]
+name = "padlinkd"
+description = "The padlink daemon: turns a plugged-in iPad into an extended Hyprland display."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+padlink-capture = { workspace = true }
+padlink-encode = { workspace = true }
+padlink-hypr = { workspace = true }
+padlink-input = { workspace = true }
+padlink-proto = { workspace = true }
+padlink-usbmux = { workspace = true }
+signal-hook = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true
