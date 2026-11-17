@@ -1,0 +1,17 @@
+[package]
+name = "padlink"
+description = "Command line for padlink: status, connect, disconnect, clean, logs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+padlink-config = { workspace = true }
+padlink-hypr = { workspace = true }
+rustix = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
