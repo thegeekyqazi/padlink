@@ -55,9 +55,15 @@ fn main() {
         let (mut prepare, mut encode) = (Vec::new(), Vec::new());
         let mut bytes = 0usize;
         for n in 0..240usize {
-            // Scroll a band of noise-like rows, as a terminal printing text would.
-            let top = (n * 37) % (height as usize - 200);
-            for row in frame[top * stride..(top + 200) * stride].chunks_exact_mut(stride) {
+            // Scroll a band of noise-like rows, as a terminal printing text
+            // would. BAND=8 in the environment makes it a thin strip, close
+            // to a pointer moving.
+            let band = std::env::var("BAND")
+                .ok()
+                .and_then(|b| b.parse().ok())
+                .unwrap_or(200usize);
+            let top = (n * 37) % (height as usize - band);
+            for row in frame[top * stride..(top + band) * stride].chunks_exact_mut(stride) {
                 row.iter_mut()
                     .enumerate()
                     .for_each(|(i, b)| *b = (i * 31 + n * 17) as u8);
