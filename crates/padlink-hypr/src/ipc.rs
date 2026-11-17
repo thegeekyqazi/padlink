@@ -242,13 +242,25 @@ pub struct Focus {
     pub monitor: Option<String>,
     /// The active window's address, such as `0x55f3ea42e280`.
     pub window: Option<String>,
-    /// The pointer position in layout coordinates.
-    pub cursor: Option<(f64, f64)>,
+    /// The pointer position relative to the focused monitor's top left
+    /// corner. Relative, because adding an output can shift monitors that
+    /// are positioned automatically, and an absolute position would then
+    /// land on a different monitor and take focus with it.
+    pub cursor_offset: Option<(f64, f64)>,
 }
 
 /// The dispatch requests that give focus back, in order (R1.11).
-pub fn restore_focus_requests(dialect: Dialect, focus: &Focus) -> Vec<String> {
+/// `monitor_origin` is where the focused monitor is in the layout now.
+pub fn restore_focus_requests(
+    dialect: Dialect,
+    focus: &Focus,
+    monitor_origin: Option<(i32, i32)>,
+) -> Vec<String> {
     let mut out = Vec::new();
+    let cursor = focus
+        .cursor_offset
+        .zip(monitor_origin)
+        .map(|((dx, dy), (mx, my))| (f64::from(mx) + dx, f64::from(my) + dy));
     match dialect {
         Dialect::Lua => {
             if let Some(m) = &focus.monitor {
@@ -263,7 +275,7 @@ pub fn restore_focus_requests(dialect: Dialect, focus: &Focus) -> Vec<String> {
                     lua_str(&format!("address:{w}"))
                 ));
             }
-            if let Some((x, y)) = focus.cursor {
+            if let Some((x, y)) = cursor {
                 out.push(format!(
                     "dispatch hl.dsp.cursor.move({{ x = {x}, y = {y} }})"
                 ));
@@ -276,7 +288,7 @@ pub fn restore_focus_requests(dialect: Dialect, focus: &Focus) -> Vec<String> {
             if let Some(w) = &focus.window {
                 out.push(format!("dispatch focuswindow address:{w}"));
             }
-            if let Some((x, y)) = focus.cursor {
+            if let Some((x, y)) = cursor {
                 out.push(format!("dispatch movecursor {} {}", x.round(), y.round()));
             }
         }
@@ -400,11 +412,7 @@ impl Hyprland {
 
     /// What has focus now, to be handed back with [`Hyprland::restore_focus`].
     pub fn focus(&self) -> Result<Focus> {
-        let monitor = self
-            .monitors()?
-            .into_iter()
-            .find(|m| m.focused)
-            .map(|m| m.name);
+        let focused = self.monitors()?.into_iter().find(|m| m.focused);
         let window = self
             .json("activewindow")
             .ok()
@@ -413,18 +421,29 @@ impl Hyprland {
             .json("cursorpos")
             .ok()
             .and_then(|v| Some((v.get("x")?.as_f64()?, v.get("y")?.as_f64()?)));
+        // Only a pointer that is on the focused monitor is worth restoring.
+        let cursor_offset = cursor.zip(focused.as_ref()).and_then(|((x, y), m)| {
+            let r = m.rect();
+            let (dx, dy) = (x - f64::from(r.x), y - f64::from(r.y));
+            (dx >= 0.0 && dy >= 0.0 && dx < f64::from(r.w) && dy < f64::from(r.h))
+                .then_some((dx, dy))
+        });
         Ok(Focus {
-            monitor,
+            monitor: focused.map(|m| m.name),
             window,
-            cursor,
+            cursor_offset,
         })
     }
 
     /// Give focus back (R1.11). A window that closed in the meantime is not
     /// an error: every step is attempted and the first failure is returned.
     pub fn restore_focus(&self, dialect: Dialect, focus: &Focus) -> Result<()> {
+        let origin = match &focus.monitor {
+            Some(name) => self.monitor(name)?.map(|m| (m.x, m.y)),
+            None => None,
+        };
         let mut first_error = None;
-        for request in restore_focus_requests(dialect, focus) {
+        for request in restore_focus_requests(dialect, focus, origin) {
             if let Err(e) = self.command(&request, "restore focus") {
                 first_error.get_or_insert(e);
             }
@@ -569,10 +588,12 @@ mod tests {
         let focus = Focus {
             monitor: Some("eDP-1".into()),
             window: Some("0x55f3ea42e280".into()),
-            cursor: Some((1200.0, 540.5)),
+            cursor_offset: Some((243.0, 540.5)),
         };
+        // The monitor sits at 957x0, so the pointer goes back to 1200x540.5.
+        let origin = Some((957, 0));
         assert_eq!(
-            restore_focus_requests(Dialect::Lua, &focus),
+            restore_focus_requests(Dialect::Lua, &focus, origin),
             [
                 r#"dispatch hl.dsp.focus({ monitor = "eDP-1" })"#,
                 r#"dispatch hl.dsp.focus({ window = "address:0x55f3ea42e280" })"#,
@@ -580,14 +601,32 @@ mod tests {
             ]
         );
         assert_eq!(
-            restore_focus_requests(Dialect::Legacy, &focus),
+            restore_focus_requests(Dialect::Legacy, &focus, origin),
             [
                 "dispatch focusmonitor eDP-1",
                 "dispatch focuswindow address:0x55f3ea42e280",
                 "dispatch movecursor 1200 541",
             ]
         );
-        assert!(restore_focus_requests(Dialect::Lua, &Focus::default()).is_empty());
+        assert!(restore_focus_requests(Dialect::Lua, &Focus::default(), origin).is_empty());
+    }
+
+    /// Adding an output can shift an automatically positioned monitor; the
+    /// pointer must follow it instead of landing on whatever is at the old spot.
+    #[test]
+    fn the_pointer_follows_its_monitor_when_the_layout_shifts() {
+        let focus = Focus {
+            monitor: Some("WAYLAND-1".into()),
+            window: None,
+            cursor_offset: Some((237.0, 126.0)),
+        };
+        let moved = restore_focus_requests(Dialect::Lua, &focus, Some((4180, 0)));
+        assert_eq!(
+            moved[1],
+            "dispatch hl.dsp.cursor.move({ x = 4417, y = 126 })"
+        );
+        // A monitor that has gone leaves the pointer alone.
+        assert_eq!(restore_focus_requests(Dialect::Lua, &focus, None).len(), 1);
     }
 
     #[test]
