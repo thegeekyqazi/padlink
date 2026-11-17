@@ -31,6 +31,8 @@ signal-hook = "0.4"
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 memmap2 = "0.9"
+gbm = { version = "0.18", default-features = false, features = ["drm-support"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 rustix = { version = "1", features = ["event", "fs", "time"] }
 plist = "1"
 serde = { version = "1", features = ["derive"] }

@@ -18,6 +18,7 @@
 // lives. Each block states why it is sound.
 #![allow(unsafe_code)]
 
+mod dmabuf;
 mod ff;
 mod packet;
 
@@ -28,6 +29,7 @@ use std::time::Instant;
 
 use ffmpeg_sys_next as sys;
 
+pub use dmabuf::Dmabuf;
 pub use packet::Packet;
 
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +66,9 @@ pub enum Error {
 
     #[error("there is no previous frame to repeat")]
     NothingToRepeat,
+
+    #[error("only the GPU encoder can take GPU buffers; this is {0}")]
+    NeedsGpuEncoder(&'static str),
 }
 
 /// What the user asked for.
@@ -152,6 +157,10 @@ pub struct Encoder {
     pts: i64,
     params: packet::ParameterSets,
     timings: Timings,
+    /// The VA-API device, when the GPU encodes.
+    gpu: Option<ff::BufferRef>,
+    /// The zero-copy input path, built on the first GPU buffer.
+    dmabuf: Option<dmabuf::DmabufSource>,
 }
 
 /// How CPU pixels become a frame the codec accepts.
@@ -213,12 +222,12 @@ impl Encoder {
         if !ff::has_encoder(kind.codec_name()) {
             return Err(Error::Missing(kind.codec_name()));
         }
-        let (source, hw_frames) = match kind {
+        let (source, hw_frames, gpu) = match kind {
             Kind::Vaapi => {
-                let (source, frames) = vaapi_source(s)?;
-                (source, Some(frames))
+                let (source, frames, device) = vaapi_source(s)?;
+                (source, Some(frames), Some(device))
             }
-            Kind::X264 | Kind::OpenH264 => (software_source(s)?, None),
+            Kind::X264 | Kind::OpenH264 => (software_source(s)?, None, None),
         };
         let codec = open_codec(kind, s, hw_frames)?;
         Ok(Encoder {
@@ -232,6 +241,8 @@ impl Encoder {
             pts: 0,
             params: packet::ParameterSets::default(),
             timings: Timings::default(),
+            gpu,
+            dmabuf: None,
         })
     }
 
@@ -332,6 +343,46 @@ impl Encoder {
         self.send_last(force_keyframe)
     }
 
+    /// Whether [`Encoder::encode_dmabuf`] can work: only the GPU encoder
+    /// takes GPU buffers.
+    pub fn takes_gpu_buffers(&self) -> bool {
+        self.kind == Kind::Vaapi
+    }
+
+    /// Encode one frame straight from a GPU buffer, with no copy through
+    /// the CPU (R1.12). The buffer must stay valid until this returns.
+    pub fn encode_dmabuf(
+        &mut self,
+        buffer: &Dmabuf,
+        force_keyframe: bool,
+    ) -> Result<Option<Packet>, Error> {
+        let Some(gpu) = &self.gpu else {
+            return Err(Error::NeedsGpuEncoder(self.kind.label()));
+        };
+        let started = Instant::now();
+        if self
+            .dmabuf
+            .as_ref()
+            .is_none_or(|d| d.fourcc != buffer.fourcc)
+        {
+            self.dmabuf = Some(dmabuf::DmabufSource::new(
+                &self.settings,
+                gpu,
+                buffer.fourcc,
+            )?);
+        }
+        self.last.unref();
+        self.has_last = false;
+        self.dmabuf.as_mut().expect("built above").convert(
+            &self.settings,
+            buffer,
+            &mut self.last,
+        )?;
+        self.has_last = true;
+        self.timings.prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
+        self.send_last(force_keyframe)
+    }
+
     /// Encode the previous picture again as a keyframe. Used when a receiver
     /// connects or asks for a keyframe while the screen is not changing.
     pub fn repeat_as_keyframe(&mut self) -> Result<Option<Packet>, Error> {
@@ -414,7 +465,7 @@ fn alloc_frame(format: sys::AVPixelFormat, s: &Settings) -> Result<ff::Frame, Er
 
 /// Build `bgr0 -> hwupload -> scale_vaapi(nv12)` on the render node and
 /// return it with the pool of NV12 surfaces the codec will read from.
-fn vaapi_source(s: &Settings) -> Result<(Source, ff::BufferRef), Error> {
+fn vaapi_source(s: &Settings) -> Result<(Source, ff::BufferRef, ff::BufferRef), Error> {
     let node = ff::cstr(&s.render_node.to_string_lossy());
     let mut device = ff::BufferRef(ptr::null_mut());
     // SAFETY: device.0 receives a new reference on success; the node is a
@@ -498,6 +549,7 @@ fn vaapi_source(s: &Settings) -> Result<(Source, ff::BufferRef), Error> {
     };
 
     let staging = alloc_frame(sys::AVPixelFormat::AV_PIX_FMT_BGR0, s)?;
+    let gpu = device.clone_ref()?;
     Ok((
         Source::Vaapi {
             staging,
@@ -507,6 +559,7 @@ fn vaapi_source(s: &Settings) -> Result<(Source, ff::BufferRef), Error> {
             _device: device,
         },
         frames,
+        gpu,
     ))
 }
 
