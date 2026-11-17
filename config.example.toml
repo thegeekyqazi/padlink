@@ -29,5 +29,9 @@ bitrate-mbps = 25
 # version ("wlr" below 0.57, "ext" from 0.57).
 capture = "auto"
 
+# Connect as soon as an iPad is plugged in. With false, nothing happens
+# until you run `padlink connect`.
+autoconnect = true
+
 # The GPU to encode on. Leave unset to use the first one found.
 # render-node = "/dev/dri/renderD128"

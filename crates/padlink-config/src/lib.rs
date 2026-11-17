@@ -5,6 +5,8 @@
 //! invalid value is an error that names the key, so a typo is never
 //! silently ignored.
 
+pub mod runtime;
+
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -111,6 +113,9 @@ pub struct Config {
     /// The GPU to encode on. Unset means the first render node found.
     pub render_node: Option<PathBuf>,
     pub capture: Capture,
+    /// Connect as soon as an iPad is plugged in, without `padlink connect`
+    /// (R2.2).
+    pub autoconnect: bool,
 }
 
 impl Default for Config {
@@ -123,6 +128,7 @@ impl Default for Config {
             bitrate_mbps: 25,
             render_node: None,
             capture: Capture::Auto,
+            autoconnect: true,
         }
     }
 }
@@ -238,6 +244,7 @@ mod tests {
             bitrate-mbps = 12
             render-node = "/dev/dri/renderD129"
             capture = "wlr"
+            autoconnect = false
             "#,
         )
         .unwrap();
@@ -251,6 +258,7 @@ mod tests {
                 bitrate_mbps: 12,
                 render_node: Some("/dev/dri/renderD129".into()),
                 capture: Capture::Wlr,
+                autoconnect: false,
             }
         );
     }
