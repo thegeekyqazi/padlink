@@ -421,8 +421,12 @@ name = "padlink"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "padlink-capture",
  "padlink-config",
+ "padlink-encode",
  "padlink-hypr",
+ "padlink-proto",
+ "padlink-usbmux",
  "rustix",
  "serde_json",
 ]

@@ -1,5 +1,6 @@
 //! `padlink`: the command line for the padlink daemon.
 
+mod doctor;
 mod show;
 
 use std::path::{Path, PathBuf};
@@ -35,6 +36,8 @@ enum Command {
     Clean,
     /// Follow the daemon's log
     Logs,
+    /// Check everything padlink needs and say how to fix what is missing
+    Doctor,
 }
 
 fn main() -> ExitCode {
@@ -79,6 +82,17 @@ fn run(command: Command) -> Result<(), String> {
             println!("Disconnected. The iPad's display is removed.");
         }
         Command::Clean => clean(&runtime)?,
+        Command::Doctor => {
+            let mut out = String::new();
+            let ok = doctor::report(
+                &doctor::checks(&runtime, padlink_config::default_path()),
+                &mut out,
+            );
+            print!("{out}");
+            if !ok {
+                return Err("doctor found a problem".into());
+            }
+        }
         Command::Logs => {
             use std::os::unix::process::CommandExt;
             let error = std::process::Command::new("journalctl")
@@ -98,7 +112,7 @@ fn run(command: Command) -> Result<(), String> {
 }
 
 /// Whether a daemon holds the session lock right now.
-fn daemon_running(runtime: &Path) -> bool {
+pub(crate) fn daemon_running(runtime: &Path) -> bool {
     let Ok(file) = std::fs::File::open(lock_path(runtime)) else {
         return false;
     };
