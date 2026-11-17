@@ -70,9 +70,9 @@ fn run(command: Command) -> Result<(), String> {
             }
         }
         Command::Connect => {
-            let status = ask(Request::Connect)?;
-            println!("Connecting. Now: {}.", status.state.label());
-            println!("Keep the OpenDisplay app open on the iPad; `padlink status` shows progress.");
+            ask(Request::Connect)?;
+            println!("Connecting. Keep the OpenDisplay app open on the iPad.");
+            println!("`padlink status` shows progress.");
         }
         Command::Disconnect => {
             ask(Request::Disconnect)?;
