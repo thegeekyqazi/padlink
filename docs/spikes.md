@@ -30,6 +30,8 @@ Found by re-checking the machine instead of trusting the table:
   `libswscale`, `libdrm`, `wayland`, `pipewire`. Missing: `libavfilter`
   (for `scale_vaapi` through the FFmpeg API) and `libva` (for calling the
   video processor directly). One of them is needed for the zero-copy path.
+  **Update:** the user has since installed `libavfilter-free-devel` 8.1.3,
+  `libva-devel` 2.23.0 and `libusbmuxd-utils` 2.1.1 (which provides `iproxy`).
 
 ## Spike 1: the receiver works at all
 
@@ -72,6 +74,10 @@ sends nothing to the receiver.
 Consequences: `hello.panel` is present (R1.5), `videoCaps` is advertised so
 `streamConfig` must be sent (R1.6), HEVC is accepted (R3.1), and the cap is
 60 fps (R1.14).
+
+Re-check after the iPad was moved to a laptop USB-A port (same day): still
+one USB device at 480 Mbit/s on bus 3, `Connect` OK, same `hello`, this time
+6 ms after dialing.
 
 Not done: streaming through the tunnel and comparing latency with Wi-Fi, and
 throughput under load on the USB 2.0 port. Both need a sender.
