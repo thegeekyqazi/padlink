@@ -306,6 +306,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "padlink-input"
+version = "0.1.0"
+dependencies = [
+ "padlink-hypr",
+ "padlink-proto",
+ "thiserror",
+ "tracing",
+ "wayland-client",
+ "wayland-protocols-wlr",
+]
+
+[[package]]
 name = "padlink-proto"
 version = "0.1.0"
 dependencies = [

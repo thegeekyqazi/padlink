@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/padlink-capture", "crates/padlink-encode", "crates/padlink-hypr", "crates/padlink-proto", "crates/padlink-usbmux"]
+members = ["crates/padlink-capture", "crates/padlink-encode", "crates/padlink-hypr", "crates/padlink-input", "crates/padlink-proto", "crates/padlink-usbmux"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ rust-version = "1.85"
 padlink-capture = { path = "crates/padlink-capture" }
 padlink-encode = { path = "crates/padlink-encode" }
 padlink-hypr = { path = "crates/padlink-hypr" }
+padlink-input = { path = "crates/padlink-input" }
 padlink-proto = { path = "crates/padlink-proto" }
 padlink-usbmux = { path = "crates/padlink-usbmux" }
 # OpenDisplay's protocol crates (GPL-3.0), pinned to a release tag (SPEC.md

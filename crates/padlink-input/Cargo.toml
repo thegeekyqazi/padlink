@@ -1,0 +1,20 @@
+[package]
+name = "padlink-input"
+description = "Input injection for padlink: finger, stylus and scroll events from the receiver become pointer events on the virtual output."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+padlink-proto = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+wayland-client = { workspace = true }
+wayland-protocols-wlr = { workspace = true }
+
+[dev-dependencies]
+padlink-hypr = { workspace = true }
+
+[lints]
+workspace = true
