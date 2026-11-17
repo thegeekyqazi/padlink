@@ -296,6 +296,18 @@ pub fn restore_focus_requests(
     out
 }
 
+/// The dispatch request that moves a workspace to a monitor (R2.4).
+pub fn move_workspace_request(dialect: Dialect, workspace: &str, monitor: &str) -> String {
+    match dialect {
+        Dialect::Lua => format!(
+            "dispatch hl.dsp.workspace.move({{ workspace = {}, monitor = {} }})",
+            lua_str(workspace),
+            lua_str(monitor)
+        ),
+        Dialect::Legacy => format!("dispatch moveworkspacetomonitor {workspace} {monitor}"),
+    }
+}
+
 /// A connection to one Hyprland instance.
 #[derive(Debug, Clone)]
 pub struct Hyprland {
@@ -408,6 +420,39 @@ impl Hyprland {
             .filter(Monitor::is_padlink)
             .map(|m| m.name)
             .collect())
+    }
+
+    /// The names of the workspaces currently on `monitor`, to be put back
+    /// with [`Hyprland::move_workspace`] when the monitor returns (R2.4).
+    /// Special workspaces (scratchpads) are left out.
+    pub fn workspaces_on(&self, monitor: &str) -> Result<Vec<String>> {
+        let all = self.json("workspaces")?;
+        Ok(all
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|w| w.get("monitor").and_then(|m| m.as_str()) == Some(monitor))
+            .filter_map(|w| w.get("name")?.as_str())
+            .filter(|name| !name.starts_with("special"))
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// Move a workspace, and the windows on it, to `monitor`. Returns
+    /// `false` when the workspace no longer exists: Hyprland deletes an
+    /// empty workspace when its monitor goes away, so there is nothing to
+    /// bring back.
+    pub fn move_workspace(&self, dialect: Dialect, workspace: &str, monitor: &str) -> Result<bool> {
+        match self.command(
+            &move_workspace_request(dialect, workspace, monitor),
+            &format!("move workspace {workspace} to {monitor}"),
+        ) {
+            Ok(()) => Ok(true),
+            Err(Error::Refused { reply, .. }) if reply.to_lowercase().contains("not found") => {
+                Ok(false)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// What has focus now, to be handed back with [`Hyprland::restore_focus`].
@@ -627,6 +672,18 @@ mod tests {
         );
         // A monitor that has gone leaves the pointer alone.
         assert_eq!(restore_focus_requests(Dialect::Lua, &focus, None).len(), 1);
+    }
+
+    #[test]
+    fn moving_a_workspace_is_written_for_each_dialect() {
+        assert_eq!(
+            move_workspace_request(Dialect::Lua, "7", "padlink-ba601e"),
+            r#"dispatch hl.dsp.workspace.move({ workspace = "7", monitor = "padlink-ba601e" })"#
+        );
+        assert_eq!(
+            move_workspace_request(Dialect::Legacy, "7", "padlink-ba601e"),
+            "dispatch moveworkspacetomonitor 7 padlink-ba601e"
+        );
     }
 
     #[test]

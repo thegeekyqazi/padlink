@@ -133,3 +133,64 @@ fn settings_that_do_not_stick_are_reported_and_cleaned_up() {
         "output left behind"
     );
 }
+
+/// R2.4: a workspace with a window on it survives the output going away
+/// and can be put back; an empty one is deleted by Hyprland and is simply
+/// reported as gone.
+#[test]
+#[ignore = "needs the nested Hyprland test bench"]
+fn workspaces_with_windows_are_moved_back_when_the_output_returns() {
+    let hypr = nested();
+    let dialect = hypr.dialect().unwrap();
+    let spec = spec(&hypr, "ws01", Placement::Right);
+    let _ = hypr.remove_output(&spec.name);
+    let before = hypr.focus().unwrap();
+    let dispatch = |expr: &str| {
+        let reply = hypr.request(&format!("dispatch {expr}")).unwrap();
+        assert_eq!(reply.trim(), "ok", "{expr}");
+    };
+    let wait_until = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !done() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    };
+    let on_output = || hypr.workspaces_on(&spec.name).unwrap();
+    let has = |list: Vec<String>, ws: &str| list.iter().any(|w| w == ws);
+
+    hypr.create_output(dialect, &spec).unwrap();
+    // Open a window on workspace 7 of the new output, and leave workspace 8
+    // there empty.
+    dispatch(&format!("hl.dsp.focus({{ monitor = \"{}\" }})", spec.name));
+    dispatch("hl.dsp.focus({ workspace = \"7\" })");
+    let mut window = std::process::Command::new("foot")
+        .args(["-e", "sleep", "30"])
+        .spawn()
+        .expect("foot is installed");
+    wait_until("the window to open", &|| {
+        hypr.request("j/clients")
+            .unwrap()
+            .contains("\"class\": \"foot\"")
+    });
+    assert!(has(on_output(), "7"), "{:?}", on_output());
+
+    // The output goes away: Hyprland parks workspace 7 on another monitor.
+    hypr.remove_output(&spec.name).unwrap();
+    assert!(on_output().is_empty());
+
+    // It returns. Workspace 7 comes back with its window; a workspace that
+    // no longer exists is reported, not an error.
+    hypr.create_output(dialect, &spec).unwrap();
+    assert!(hypr.move_workspace(dialect, "7", &spec.name).unwrap());
+    assert!(!hypr.move_workspace(dialect, "8", &spec.name).unwrap());
+    assert!(has(on_output(), "7"), "{:?}", on_output());
+
+    let _ = window.kill();
+    let _ = window.wait();
+    hypr.restore_focus(dialect, &before).unwrap();
+    hypr.remove_output(&spec.name).unwrap();
+}
