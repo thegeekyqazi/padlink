@@ -1,0 +1,21 @@
+# SPEC.md section 9: fmt, clippy, tests. Not yet run on GitHub: the
+# repository has no remote. The tests that create outputs are ignored by
+# default and need the nested test bench, so they do not run here; the
+# encode tests skip encoders that cannot open (there is no GPU in CI).
+name: ci
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y git gcc clang pkgconf-pkg-config rust cargo rustfmt clippy \
+            libavcodec-free-devel libavfilter-free-devel libavutil-free-devel \
+            libswscale-free-devel
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
