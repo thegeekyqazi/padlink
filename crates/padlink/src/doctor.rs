@@ -149,6 +149,9 @@ pub fn checks(runtime: &Path, config_path: Option<std::path::PathBuf>) -> Vec<Ch
         Box::new(move || {
             let instance = match find_hypr() {
                 Ok(i) => i,
+                Err(e @ padlink_hypr::FindError::NotRunning { .. }) => {
+                    return fail(e.to_string(), "open a new terminal");
+                }
                 Err(e) => return fail(e.to_string(), "run padlink inside a Hyprland session"),
             };
             let hypr = Hyprland::new(instance.request_socket());

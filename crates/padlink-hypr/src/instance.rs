@@ -79,7 +79,11 @@ pub enum FindError {
          start it from inside one"
     )]
     NoneRunning(String),
-    #[error("HYPRLAND_INSTANCE_SIGNATURE names {wanted}, which is not running. Running: {running}")]
+    #[error(
+        "this terminal points at a Hyprland instance that is no longer running \
+         ({wanted}; running: {running}). It was probably set up for a nested test \
+         instance that has ended. Open a new terminal and run the command there"
+    )]
     NotRunning { wanted: String, running: String },
 }
 
