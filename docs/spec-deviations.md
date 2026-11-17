@@ -38,6 +38,25 @@ machine (rule 7). They are not choices.
 | --- | --- | --- | --- | --- |
 | T1 | Capture to encoded packet, p50 8 ms or less, at 2360x1640 | 14.6 ms with pixels uploaded from the CPU (3.6 ms upload + 11.1 ms GPU convert and encode). About 11 ms expected with zero-copy | The Radeon encoder's throughput: about 2.9 ms per megapixel, linear across sizes, unaffected by rate control or presets. Details in `docs/spikes.md` | (a) Accept about 11 ms; the 20 ms end-to-end target still looks reachable. (b) Use x264 with a multi-threaded colour conversion: lower latency, much more CPU. (c) Stream fewer pixels, for example 1640x1148 (6.9 ms), giving up sharpness. The build continues with (a), GPU first as the spec orders; the choice stays open until end-to-end numbers exist |
 
+| T2 | End to end p50 20 ms, p95 35 ms | Met in ordinary use (14 to 17 ms p50, 16 to 18 ms p95). Missed under full-screen change: 30 to 39 ms p50 at 39 to 50 fps, where the official sender reaches 18 ms | Each frame takes longer to process than the gap between frames; details in `docs/spikes.md` | Zero-copy capture, multi-threaded colour conversion, VBR. Which encoder is the default is an open question for the user: on this laptop x264 is at least as fast as the GPU, at a higher CPU cost |
+
+## Not built yet (Phase 1)
+
+Requirements still open as of 16 Nov 2026, so nobody reads the code and
+assumes they exist:
+
+| Requirement | State |
+| --- | --- |
+| R1.2 telling locked from untrusted | One combined message for unplugged, locked or untrusted |
+| R1.12 zero-copy (dmabuf) capture | Not built. The shared-memory fallback is the only path today |
+| Section 8: `ext-image-copy-capture` from Hyprland 0.57 | Not built. `wlr-screencopy` is used on every version |
+| R1.14 bitrate and fps from config | Hard-coded defaults (60 fps, 25 Mbit/s); only `PADLINK_ENCODER` is adjustable |
+| R1.21 lock file | Not built |
+| R1.22 `padlink status`, R1.24 journal and `padlink logs` | Not built; the daemon logs to its terminal |
+| R1.23 config file | Not built |
+| CLI `padlink` (`connect`, `disconnect`, `clean`, `doctor`) | Not built. `padlinkd` runs one session and exits |
+| Section 9: fake receiver that decodes the stream; CI | Not built |
+
 ## Requirements changed
 
 - **R1.16 widened (D9, agreed 16 Nov 2026):** `pencil` down, move and up drive

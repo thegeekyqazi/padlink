@@ -208,6 +208,45 @@ Findings:
   sender reached 18 ms with a 15 ms CPU encode, so about 11 ms of GPU time
   should land near 14 to 15 ms. Unmeasured until the daemon streams.
 
+### Follow-up: first end-to-end numbers from `padlinkd`
+
+16 Nov 2026, `testbench/padlinkd.sh` in the nested Hyprland, real iPad over
+USB through usbmuxd, 2360x1640, shared-memory capture. "End to end" is the
+iPad's own figure. The nested bench shares the integrated GPU between two
+compositors, so the live session may do better.
+
+| Load | Encoder | Frame rate | Capture to encoded p50 / p95 | End to end p50 / p95 |
+| --- | --- | --- | --- | --- |
+| Light: pointer moving | `h264_vaapi` | 60 fps | 13.5 / 14.0 ms | 16 to 17 / 18 ms |
+| Light: pointer moving | x264 | 60 fps | 13.6 / 14.7 ms | 14 / 16 ms |
+| Heavy: full-screen scrolling text | `h264_vaapi` | 39 fps | 35.8 / 38.5 ms | 39 / 41 ms |
+| Heavy: full-screen scrolling text | x264 | 50 fps | 26.6 / 37.0 ms | 30 / 41 ms |
+| Heavy, for reference: official `od-sender`, x264 (Spike 2) | | 52 fps | 15.2 / 17.6 ms | 18 / 21 ms |
+
+Per-stage medians: `h264_vaapi` light 3.6 ms upload + 9.8 ms codec, heavy
+5.8 + 20; x264 light 9.7 ms colour conversion + 3.9 ms codec, heavy
+12.9 + 6.7. Encoded-to-sent is 0.1 ms in every run: the USB tunnel adds
+nothing measurable on the sending side.
+
+Reading:
+
+- **Ordinary use meets the end-to-end targets** (20 ms p50, 35 ms p95) with
+  either encoder.
+- **Under full-screen change padlink is behind the official sender.** A
+  frame takes 20 to 26 ms to process, longer than the 16.7 ms between
+  frames, so frames wait in the slot and some are replaced. The GPU codec
+  slows from 10 to 20 ms when the same GPU is busy compositing the changing
+  screen.
+- The official sender is faster under load because it converts colours on
+  several threads and overlaps conversion with encoding.
+- `h264_vaapi` in CBR mode pads to the full 25 Mbit/s even when only the
+  pointer moves. It should be VBR.
+
+What should close the gap, in order of expected effect: zero-copy capture
+(removes the compositor's readback and the 3.6 to 5.8 ms upload on the GPU
+path); a multi-threaded colour conversion (cuts 10 to 13 ms to about 3 on
+the CPU path); VBR rate control.
+
 ## Spike 5: stylus type
 
 Done: the third-party pencil arrives as `pencil` messages, not `touch`.
