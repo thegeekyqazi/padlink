@@ -4,8 +4,8 @@ For whoever continues this project, human or agent. It assumes you have not
 seen the earlier conversation. Keep it current: update the "State" and "What
 is left" sections whenever you finish something.
 
-Last updated: 16 Nov 2026, after commit "Spec differences: GPU bitrate does
-not follow content" (49 commits on `main`, no remote).
+Last updated: 16 Nov 2026, after the long-running daemon and the `padlink`
+CLI were built and checked against the real iPad in the nested bench.
 
 ## 1. What this is
 
@@ -50,7 +50,8 @@ crates/
   padlink-encode    h264_vaapi, x264, OpenH264 through raw FFmpeg bindings
   padlink-input     touch, stylus and scroll as a virtual pointer on the output
   padlink-config    ~/.config/padlink/config.toml, strict keys
-  padlinkd          the daemon: one streaming session today
+  padlinkd          the daemon: lock, control socket, state machine, sessions
+  padlink           the CLI: status, connect, disconnect, clean, logs
 testbench/          nested Hyprland and the scripts that are safe to run
 spikes/             Phase 0 probes (Python): usbmux_probe.py, tap_proxy.py
 reference/          git-ignored: OpenDisplay source and its od-sender binary
@@ -70,13 +71,21 @@ protocol is `reference/opendisplay/PROTOCOL.md`.
 
 ## 4. How it works today
 
-`padlinkd` (`crates/padlinkd/src/main.rs`) does one session and exits:
+`padlinkd` (`crates/padlinkd/src/main.rs`) runs until it is signalled:
 
 1. Loads the config. A broken config stops it before it touches anything.
-2. Finds the Hyprland instance, detects version and config dialect, removes
-   leftover `padlink-*` outputs.
-3. Waits for an iPad on USB through usbmuxd, dials port 9000 with backoff.
-4. Runs `Session` (`session.rs`):
+2. Takes the session lock (`$XDG_RUNTIME_DIR/padlink/lock`, `flock`), finds
+   the Hyprland instance, detects version and config dialect, removes
+   leftover `padlink-*` outputs, and listens on the control socket
+   (`$XDG_RUNTIME_DIR/padlink/control`, one JSON line each way; types in
+   `padlink-config/src/runtime.rs`).
+3. Loops ten times a second: reads what the user wants (`Shared::wanted`,
+   set by `connect` and `disconnect`), polls usbmuxd for a USB device, and
+   feeds events to the pure state machine in `machine.rs` (`Paused`, `Idle`,
+   `Attached`, `Connected`). The machine answers with when to dial next
+   (backoff 0.5 s to 3 s).
+4. When a dial succeeds it runs a `Session` (`session.rs`) on the same
+   thread:
    - a reader thread feeds socket bytes to the session thread;
    - the session thread drives `padlink_proto::OpenDisplay` and performs its
      `Action`s. It is the only writer to the socket;
@@ -84,9 +93,14 @@ protocol is `reference/opendisplay/PROTOCOL.md`.
      the headless output, restores focus, starts the input injector, a
      capture thread and an encode thread;
    - capture puts frames into a latest-wins `Slot`; the encode thread takes
-     them and sends packets to the session thread through a channel of one.
-5. On SIGINT, SIGTERM, SIGHUP, `closing`, `sleeping` or a dropped link it
-   tears the pipeline down in the fixed order and exits.
+     them and sends packets to the session thread through a channel of one;
+   - once a second it publishes figures into the shared `Status`.
+5. A session ends on `disconnect`, a signal, `closing`, `sleeping` or a
+   dropped link. It tears the pipeline down in the fixed order and the loop
+   carries on; only a signal exits.
+
+The `padlink` CLI (`crates/padlink`) talks to the control socket. `clean`
+does not: it talks to Hyprland directly and refuses while the lock is held.
 
 The stream is always exactly the output's size (no scaling). The output name
 is `padlink-<last 6 characters of the UDID>`.
@@ -97,7 +111,8 @@ is `padlink-<last 6 characters of the UDID>`.
 cargo test --workspace                 # unit and fake-socket tests, real encodes
 testbench/nested.sh                    # terminal 1: nested Hyprland in a window
 testbench/run-nested-tests.sh          # terminal 2: the 8 tests that create outputs
-testbench/padlinkd.sh                  # terminal 2: stream to the iPad from the nested instance
+testbench/padlinkd.sh                  # terminal 2: the daemon, against the nested instance
+testbench/padlink.sh status            # terminal 3: the CLI, with the nested environment
 testbench/wiggle.sh 12                 # light load: moves the pointer on the padlink output
 cargo run --release -p padlink-encode --example bench            # encoder timing
 cargo run -p padlink-usbmux --example hello                      # reads the iPad's hello
@@ -142,7 +157,8 @@ Working and tested:
 | Encode | R1.13, R1.15 | 9 real-encode tests incl. SPS size for all three encoders |
 | Input | R1.16, R1.17 | 10 unit tests, 2 nested tests |
 | Config | R1.14, R1.23 | 12 tests |
-| Daemon session | R1.19 signals, R1.20 at startup, R1.24 timings in the log | Streamed to the real iPad; clean SIGTERM teardown |
+| Daemon | R1.3, R1.19, R1.20, R1.21, R1.22, R1.24 timings in the log | 21 tests (state machine, lock, control socket); with the real iPad: streamed, `status`, `disconnect` in 0.2 s, `connect`, second daemon refused, `kill -9` then `clean` |
+| CLI | R1.20, R1.22 | 3 formatting tests; every command run against the nested daemon |
 
 Measured (details in `docs/spikes.md`): light load 14 to 17 ms end to end at
 60 fps with either encoder; heavy full-screen load 30 to 39 ms at 39 to 50
@@ -170,28 +186,13 @@ In the order I would do it. Each item names the files and the approach.
 
 ### Phase 1
 
-1. **Daemon proper** (`crates/padlinkd`). `main.rs` runs one session and
-   exits; the spec wants a long-running daemon with a state machine
-   (`Idle`, `Attached`, `Handshake`, `Streaming`, `Teardown`).
-   - Loop: listen for attach and detach with `padlink_usbmux::Listener`,
-     dial, run a `Session`, then decide by `SessionEnd`: `ReceiverSleeping`
-     and `Disconnected` keep dialing while the device is attached,
-     `ReceiverClosed` waits for the app, `Stopped` exits.
-   - Put the state machine in its own file with fake events so its
-     transitions are unit-tested (SPEC.md section 9).
-   - **Lock file** (R1.21): `flock` on `$XDG_RUNTIME_DIR/padlink/lock`.
-   - **Control socket**: a Unix socket at `$XDG_RUNTIME_DIR/padlink/control`
-     with line-based JSON requests: `status`, `connect`, `disconnect`.
-     `Session` already keeps `Figures`; expose them through an
-     `Arc<Mutex<Status>>` the control thread can read.
-   - Logs to the journal (R1.24): when `JOURNAL_STREAM` is set, drop the
-     timestamps (journald adds its own); `padlink logs` then runs
-     `journalctl --user -u padlinkd -f`.
-2. **CLI** (`crates/padlink`, new): `status` (`--json`), `connect`,
-   `disconnect`, `clean`, `logs`, `doctor`. Use `clap`. `clean` and `doctor`
-   work without the daemon; `clean` calls
-   `Hyprland::leftover_outputs` and `remove_output`. `doctor` is R2.10: the
-   check order is listed there.
+1. Done: the long-running daemon, lock file, control socket and CLI.
+   Loose ends there: the daemon polls `list_devices` instead of using
+   `padlink_usbmux::Listener`; under systemd the log lines still carry their
+   own timestamps; `padlink doctor` (R2.10) does not exist.
+2. Done: `packaging/padlinkd.service` and `README.md`, if present in the
+   tree; otherwise write them (a user unit bound to
+   `graphical-session.target`, R2.1).
 3. **Zero-copy capture** (R1.12): the biggest remaining latency item for
    the GPU path. It removes the compositor's readback and the 3.6 to 5.8 ms
    upload.
@@ -235,7 +236,7 @@ In the order I would do it. Each item names the files and the approach.
 9. A `README.md`: install, usage, the foreground-app limit (SPEC.md section
    6), and credit to OpenDisplay for the adapted code.
 
-Phase 1 is done when `padlink connect` extends the desktop with hardware
+Phase 1's commands work in the nested bench. Phase 1 is done when `padlink connect` extends the desktop with hardware
 encoding and working touch, and `padlink disconnect` leaves the session as
 it was. Then stop and let the user run the manual acceptance list in
 SPEC.md section 9 on the **live** session. That is the first time anything

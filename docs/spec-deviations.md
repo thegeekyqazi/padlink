@@ -16,6 +16,7 @@ early in Phase 1. Entries D1 to D8 are about Phase 0; D9 is an agreed change to 
 | D6 | Host setup: user runs `sudo dnf install mesa-va-drivers-freeworld` | Skipped | Already installed | None |
 | D8 | Not in the spec | `testbench/od-sender.sh` wraps the official sender so it can only run against the nested instance | Makes D2 enforceable, and gives the session one narrow thing to be permitted to run | None on the product |
 | D9 | R1.16: "Stylus input that arrives as `touch` works the same way"; `pencil` handling is Phase 3 (R3.4) | **Agreed by the user on 16 Nov 2026:** in Phase 1, also map `pencil` down, move and up to pointer motion and left button, exactly like `touch` | Spike 5 showed this receiver sends `pencil`, never `touch`, for the stylus. Without this the pencil is dead until the uinput tablet exists | The pencil works as a plain pointer from Phase 1. R3.4 later replaces it with a real tablet device. Small change in `padlink-input` |
+| D10 | R1.20: "`padlink clean` removes any leftover `padlink-*` output from a crash" | `clean` refuses while a daemon holds the session lock | Removing an output that is being captured can crash Hyprland 0.56.2 (section 8). `disconnect` is the right command then, and the message says so | None for the crash case the requirement is about |
 | D7 | Section 4 lists reference code to read; no location given | Cloned into `reference/`, which is git-ignored, along with the `od-sender` download | Keeps third-party source and binaries out of this repo's history | `reference/` must be re-created on a fresh clone; `docs/spikes.md` names the pinned tag |
 
 ## Where the spec's facts were wrong
@@ -44,20 +45,22 @@ machine (rule 7). They are not choices.
 
 ## Not built yet (Phase 1)
 
-Requirements still open as of 16 Nov 2026, so nobody reads the code and
-assumes they exist:
+Requirements still open, so nobody reads the code and assumes they exist.
+Last updated 16 Nov 2026, after the daemon and CLI were built.
 
 | Requirement | State |
 | --- | --- |
 | R1.2 telling locked from untrusted | One combined message for unplugged, locked or untrusted |
 | R1.12 zero-copy (dmabuf) capture | Not built. The shared-memory fallback is the only path today |
-| Section 8: `ext-image-copy-capture` from Hyprland 0.57 | Not built. `wlr-screencopy` is used on every version |
-| R1.14 bitrate and fps from config | Hard-coded defaults (60 fps, 25 Mbit/s); only `PADLINK_ENCODER` is adjustable |
-| R1.21 lock file | Not built |
-| R1.22 `padlink status`, R1.24 journal and `padlink logs` | Not built; the daemon logs to its terminal |
-| R1.23 config file | Not built |
-| CLI `padlink` (`connect`, `disconnect`, `clean`, `doctor`) | Not built. `padlinkd` runs one session and exits |
+| Section 8: `ext-image-copy-capture` from Hyprland 0.57 | Not built. `wlr-screencopy` is used on every version; `capture = "ext"` warns |
+| R1.24 logs to the journal | The daemon logs to stderr, which the journal captures under systemd. `padlink logs` follows the unit. Timestamps are not yet dropped under the journal |
+| Section 4 hotplug through usbmuxd `Listen` | The daemon polls `ListDevices` ten times a second instead. `padlink_usbmux::Listener` exists and is tested but is not used |
+| `padlink doctor` | Not built (it is R2.10, Phase 2) |
 | Section 9: fake receiver that decodes the stream; CI | Not built |
+
+Built since this table was first written: config file (R1.23), lock file
+(R1.21), `padlink status` (R1.22), `connect`, `disconnect`, `clean` (R1.20),
+`logs`, continuous running with reconnect.
 
 ## Requirements changed
 
