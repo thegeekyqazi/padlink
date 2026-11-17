@@ -1,0 +1,19 @@
+[package]
+name = "padlink-proto"
+description = "The receiver side of the wire, behind a trait: OpenDisplay protocol version 3 today, other receivers later."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+opendisplay-proto = { workspace = true }
+opendisplay-session = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

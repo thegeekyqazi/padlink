@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/padlink-usbmux"]
+members = ["crates/padlink-proto", "crates/padlink-usbmux"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,7 +9,13 @@ license = "GPL-3.0-only"
 rust-version = "1.85"
 
 [workspace.dependencies]
+padlink-proto = { path = "crates/padlink-proto" }
 padlink-usbmux = { path = "crates/padlink-usbmux" }
+# OpenDisplay's protocol crates (GPL-3.0), pinned to a release tag (SPEC.md
+# rule 4). Vendor them if upstream breaks.
+opendisplay-proto = { git = "https://github.com/peetzweg/opendisplay", tag = "v1.30.3" }
+opendisplay-session = { git = "https://github.com/peetzweg/opendisplay", tag = "v1.30.3" }
+serde_json = "1"
 plist = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
